@@ -13,9 +13,9 @@ export interface GeminiLiveConfig {
 }
 
 export interface GeminiLiveCallbacks {
-  onOriginalText: (text: string) => void;    // Input transcription (what was said)
-  onTranslatedText: (text: string) => void;  // Output transcription (translation)
-  onAudio: (base64Audio: string) => void;    // Translated audio chunk
+  onOriginalText: (text: string) => void;
+  onTranslatedText: (text: string) => void;
+  onAudio: (base64Audio: string) => void;
   onError: (error: string) => void;
   onStateChange: (state: 'connecting' | 'connected' | 'disconnected') => void;
 }
@@ -42,7 +42,7 @@ export class GeminiLiveSession {
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      // Send setup message — native audio model outputs audio directly
+      // Send setup message
       const setup = {
         setup: {
           model: `models/${this.config.model}`,
@@ -58,27 +58,38 @@ export class GeminiLiveSession {
         },
       };
       this.ws!.send(JSON.stringify(setup));
+      this.callbacks.onError('WS open, setup 전송됨');
     };
 
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string);
 
+        // Debug: show what we receive
+        const keys = Object.keys(msg);
+        this.callbacks.onError(`수신: ${keys.join(',')}`);
+
         // Setup complete
-        if (msg.setupComplete) {
+        if (msg.setupComplete !== undefined) {
           this.callbacks.onStateChange('connected');
+          return;
+        }
+
+        // Error from server
+        if (msg.error) {
+          this.callbacks.onError(`Gemini 에러: ${msg.error.message || JSON.stringify(msg.error)}`);
           return;
         }
 
         const sc = msg.serverContent;
         if (!sc) return;
 
-        // Input transcription (original speech)
+        // Input transcription
         if (sc.inputTranscription?.text) {
           this.callbacks.onOriginalText(sc.inputTranscription.text);
         }
 
-        // Output transcription (translated text)
+        // Output transcription
         if (sc.outputTranscription?.text) {
           this.callbacks.onTranslatedText(sc.outputTranscription.text);
         }
@@ -97,16 +108,15 @@ export class GeminiLiveSession {
     };
 
     this.ws.onerror = (e) => {
-      this.callbacks.onError(`WebSocket error: ${(e as ErrorEvent).message || 'connection failed'}`);
+      this.callbacks.onError(`WS error: ${(e as ErrorEvent).message || 'unknown'}`);
       this.callbacks.onStateChange('disconnected');
     };
 
     this.ws.onclose = (e) => {
-      const reason = e.reason || `code ${e.code}`;
+      this.callbacks.onError(`WS close: code=${e.code} reason=${e.reason || 'none'}`);
       if (e.code !== 1000) {
-        this.callbacks.onError(`연결 종료: ${reason} (${e.code})`);
+        this.callbacks.onStateChange('disconnected');
       }
-      this.callbacks.onStateChange('disconnected');
     };
   }
 
