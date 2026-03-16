@@ -42,12 +42,12 @@ export class GeminiLiveSession {
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      // Send setup message with model config
+      // Send setup message — native audio model outputs audio directly
       const setup = {
         setup: {
           model: `models/${this.config.model}`,
           generationConfig: {
-            responseModalities: ['AUDIO', 'TEXT'],
+            responseModalities: ['AUDIO'],
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } },
             },
@@ -55,8 +55,6 @@ export class GeminiLiveSession {
           systemInstruction: {
             parts: [{ text: this.config.systemPrompt }],
           },
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
         },
       };
       this.ws!.send(JSON.stringify(setup));
