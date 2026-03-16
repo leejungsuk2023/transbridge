@@ -133,13 +133,13 @@ export class GeminiLiveSession {
 
   sendAudio(base64PcmChunk: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      // Use audio field (mediaChunks is deprecated)
+      // Try mediaChunks format (array) — some models require this
       this.ws.send(JSON.stringify({
         realtimeInput: {
-          audio: {
+          mediaChunks: [{
             mimeType: 'audio/pcm;rate=16000',
             data: base64PcmChunk,
-          },
+          }],
         },
       }));
     }
