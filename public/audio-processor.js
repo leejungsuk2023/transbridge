@@ -8,7 +8,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     // Target output sample rate (Gemini expects 16kHz)
     this._targetSampleRate = (options && options.processorOptions && options.processorOptions.targetSampleRate) || 16000;
     this._inputSampleRate = sampleRate; // AudioWorkletGlobalScope provides sampleRate
-    this._bufferSize = 4096;
+    this._bufferSize = 2048;
     this._buffer = new Float32Array(this._bufferSize);
     this._bytesWritten = 0;
     // Resampling state

@@ -54,6 +54,7 @@ export default function SessionPage() {
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
+  const audioChunkCountRef = useRef(0);
 
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
@@ -180,6 +181,10 @@ export default function SessionPage() {
             }
             const base64Chunk = btoa(binary);
             session.sendAudio(base64Chunk);
+            audioChunkCountRef.current++;
+            if (audioChunkCountRef.current % 20 === 1) {
+              setError(`오디오 전송 중: ${audioChunkCountRef.current}청크, ${bytes.length}bytes`);
+            }
           };
 
           source.connect(workletNode);
