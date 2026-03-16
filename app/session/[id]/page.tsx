@@ -229,10 +229,10 @@ export default function SessionPage() {
     geminiSessionRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     try {
-      await fetch(`/api/session/${sessionId}`, {
+      await fetch("/api/session", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "ended" }),
+        body: JSON.stringify({ id: sessionId, status: "ended" }),
       });
     } catch {
       // Navigate regardless

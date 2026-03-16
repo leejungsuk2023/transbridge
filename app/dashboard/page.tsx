@@ -27,23 +27,34 @@ export default function DashboardPage() {
     if (!selectedLang) return;
     setStarting(true);
     try {
-      // Get current session token from Supabase
-      const { data: { session } } = await getSupabaseBrowserClient().auth.getSession();
-      const token = session?.access_token;
+      const supabase = getSupabaseBrowserClient();
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      const token = authSession?.access_token;
+
+      if (!token) {
+        // No token — try refreshing session first
+        const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+        if (!refreshed?.access_token) {
+          // Still no token — redirect to login
+          router.push("/");
+          return;
+        }
+      }
+
+      const finalToken = token || (await supabase.auth.getSession()).data.session?.access_token;
 
       const res = await fetch("/api/session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+          ...(finalToken ? { "Authorization": `Bearer ${finalToken}` } : {}),
         },
         body: JSON.stringify({ patientLang: selectedLang }),
       });
       const data = await res.json();
-      const sessionId = data.sessionId ?? data.data?.id ?? `sess_${Date.now()}`;
+      const sessionId = data.data?.session?.id ?? data.data?.id ?? data.sessionId ?? `sess_${Date.now()}`;
       router.push(`/session/${sessionId}?lang=${selectedLang}`);
     } catch {
-      // Fallback: use local ID if API fails
       const sessionId = `sess_${Date.now()}`;
       router.push(`/session/${sessionId}?lang=${selectedLang}`);
     } finally {
