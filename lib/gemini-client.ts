@@ -98,12 +98,16 @@ export class GeminiLiveSession {
       }
     };
 
-    this.ws.onerror = () => {
-      this.callbacks.onError('WebSocket connection error');
+    this.ws.onerror = (e) => {
+      this.callbacks.onError(`WebSocket error: ${(e as ErrorEvent).message || 'connection failed'}`);
       this.callbacks.onStateChange('disconnected');
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (e) => {
+      const reason = e.reason || `code ${e.code}`;
+      if (e.code !== 1000) {
+        this.callbacks.onError(`연결 종료: ${reason} (${e.code})`);
+      }
       this.callbacks.onStateChange('disconnected');
     };
   }
