@@ -42,7 +42,7 @@ export class GeminiLiveSession {
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      // Minimal setup for native audio model
+      // Step 1: Try absolute minimum setup first
       const setup = {
         setup: {
           model: `models/${this.config.model}`,
@@ -50,12 +50,12 @@ export class GeminiLiveSession {
             responseModalities: ['AUDIO'],
           },
           systemInstruction: {
-            parts: [{ text: this.config.systemPrompt }],
+            parts: [{ text: 'You are a Korean to Thai medical interpreter. Listen to Korean speech and respond with Thai translation. Translate only, no commentary.' }],
           },
         },
       };
       this.ws!.send(JSON.stringify(setup));
-      this.callbacks.onError(`setup 전송: ${this.config.model}`);
+      this.callbacks.onError(`setup 전송 완료, 응답 대기중...`);
     };
 
     this.ws.onmessage = (event) => {
