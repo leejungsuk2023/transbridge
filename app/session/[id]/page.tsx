@@ -230,7 +230,7 @@ export default function SessionPage() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     try {
       await fetch("/api/session", {
-        method: "PATCH",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: sessionId, status: "ended" }),
       });

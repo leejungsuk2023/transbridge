@@ -9,9 +9,23 @@ import { createClient } from '@supabase/supabase-js';
 // Singleton browser client — one instance per browser tab, prevents
 // "Multiple GoTrueClient instances detected" warning and ensures session
 // state is shared across all callers.
+// NOTE: Only stored when running in a real browser (window exists).
+// During SSR the singleton is never set, so each server render gets a
+// fresh, non-persisting instance and never clobbers the client singleton.
 let browserClient: ReturnType<typeof createClient> | null = null;
 
 export function getSupabaseBrowserClient() {
+  // Server-side (SSR/build): return a throw-away instance with no session
+  // persistence so the module-level singleton is never touched server-side.
+  if (typeof window === 'undefined') {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { persistSession: false } }
+    );
+  }
+
+  // Client-side: reuse the singleton so session state is shared.
   if (!browserClient) {
     browserClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

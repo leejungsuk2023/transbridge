@@ -30,6 +30,7 @@ export default function DashboardPage() {
       const supabase = getSupabaseBrowserClient();
       const { data: { session: authSession } } = await supabase.auth.getSession();
       const token = authSession?.access_token;
+      console.log('[Dashboard] Auth session:', authSession ? 'exists' : 'null', 'token:', token ? token.slice(0, 10) + '...' : 'null');
 
       if (!token) {
         // No token — try refreshing session first
@@ -52,11 +53,18 @@ export default function DashboardPage() {
         body: JSON.stringify({ patientLang: selectedLang }),
       });
       const data = await res.json();
-      const sessionId = data.data?.session?.id ?? data.data?.id ?? data.sessionId ?? `sess_${Date.now()}`;
+      console.log('[Dashboard] Session API response:', JSON.stringify(data));
+      // API returns { success: true, data: { session: { id, ... } } }
+      const sessionId = data.data?.session?.id;
+      if (!sessionId) {
+        console.error('[Dashboard] No session ID in response:', data);
+        alert('세션 생성에 실패했습니다. 다시 시도해주세요.');
+        return;
+      }
       router.push(`/session/${sessionId}?lang=${selectedLang}`);
-    } catch {
-      const sessionId = `sess_${Date.now()}`;
-      router.push(`/session/${sessionId}?lang=${selectedLang}`);
+    } catch (err) {
+      console.error('[Dashboard] Session creation error:', err);
+      alert('세션 생성 중 오류가 발생했습니다. 다시 시도해주세요.');
     } finally {
       setStarting(false);
     }

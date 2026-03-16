@@ -43,18 +43,21 @@ export class GeminiLiveSession {
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      const setup = {
+      // BidiGenerateContent setup: top-level key is "setup", responseModalities
+      // goes directly in setup (not nested under generationConfig).
+      // inputAudioTranscription must be enabled for the model to process audio input.
+      const setupMsg = {
         setup: {
           model: `models/${this.config.model}`,
-          generationConfig: {
-            responseModalities: ['AUDIO'],
-          },
+          responseModalities: ['AUDIO'],
           systemInstruction: {
             parts: [{ text: this.config.systemPrompt }],
           },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
         },
       };
-      this.ws!.send(JSON.stringify(setup));
+      this.ws!.send(JSON.stringify(setupMsg));
       this.callbacks.onError(`setup 전송 완료, 응답 대기중...`);
     };
 

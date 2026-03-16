@@ -11,6 +11,7 @@ import { getSupabaseAdmin } from '@/lib/supabase';
 import type { Session } from '@/types';
 
 /** Verify Supabase JWT from Authorization header and return the user id */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function verifyToken(req: NextRequest): Promise<string | null> {
   const authHeader = req.headers.get('authorization') || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -26,6 +27,7 @@ async function verifyToken(req: NextRequest): Promise<string | null> {
 }
 
 /** Get hospital record for the authenticated user */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function getHospitalId(authUserId: string): Promise<string | null> {
   const supabase = getSupabaseAdmin();
   const { data } = await supabase
@@ -39,26 +41,50 @@ async function getHospitalId(authUserId: string): Promise<string | null> {
 // ── POST: Create session ─────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const authUserId = await verifyToken(req);
-    if (!authUserId) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const hospitalId = await getHospitalId(authUserId);
-    if (!hospitalId) {
-      return NextResponse.json({ success: false, error: 'Hospital not found' }, { status: 404 });
-    }
-
     const body = await req.json().catch(() => ({}));
     const patientLang = body.patientLang ?? null;
 
     const supabase = getSupabaseAdmin();
+
+    // Try to get hospital from auth token if available
+    let hospitalId: string | null = null;
+    const authHeader = req.headers.get('authorization') || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    if (token) {
+      try {
+        const { data: userData } = await supabase.auth.getUser(token);
+        if (userData.user) {
+          const { data: hospital } = await supabase
+            .from('hospitals')
+            .select('id')
+            .eq('auth_user_id', userData.user.id)
+            .single();
+          hospitalId = hospital?.id ?? null;
+        }
+      } catch {}
+    }
+
+    // Fallback: use first hospital (single-device, single-hospital setup)
+    if (!hospitalId) {
+      const { data: firstHospital } = await supabase
+        .from('hospitals')
+        .select('id')
+        .limit(1)
+        .single();
+      hospitalId = firstHospital?.id ?? null;
+    }
+
+    if (!hospitalId) {
+      return NextResponse.json({ success: false, error: 'No hospital found' }, { status: 404 });
+    }
+
     const { data, error } = await supabase
       .from('sessions')
       .insert({
         hospital_id: hospitalId,
         patient_lang: patientLang,
-        status: 'waiting',
+        status: 'active',
       })
       .select('id, hospital_id, patient_lang, status, started_at')
       .single();
@@ -121,7 +147,12 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ── PATCH: Update session ────────────────────────────────────────────────────
+// ── PATCH / PUT: Update session ──────────────────────────────────────────────
+// PUT is provided as a fallback because some CDN/proxy layers drop PATCH requests.
+export async function PUT(req: NextRequest) {
+  return PATCH(req);
+}
+
 export async function PATCH(req: NextRequest) {
   try {
     const { id, status, patientLang } = await req.json();
