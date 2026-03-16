@@ -84,7 +84,8 @@ CRITICAL RULE — Language detection and translation direction:
 
 Translation rules:
 - Translate the COMPLETE sentence. Do not stop mid-sentence. Wait for the speaker to finish, then translate the full utterance.
-- Translate ONLY — no explanations, no thinking out loud, no filler words, no commentary.
+- Translate ONLY — no explanations, no thinking out loud, no filler words, no commentary, no internal reasoning.
+- Do NOT output text like "Translating..." or thinking process. Output ONLY the spoken translation audio.
 - Speak naturally and fluently in the target language.
 - Medical context: hospital reception, examination, diagnosis, treatment, payment, insurance.
 - If input is silent or unclear, say nothing.`;
