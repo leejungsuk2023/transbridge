@@ -33,8 +33,9 @@ export class GeminiLiveSession {
   async connect(): Promise<void> {
     this.callbacks.onStateChange('connecting');
 
+    // Ephemeral tokens use access_token=; direct API keys use key=
     const authParam = this.config.ephemeralToken
-      ? `bearer_token=${this.config.ephemeralToken}`
+      ? `access_token=${this.config.ephemeralToken}`
       : `key=${this.config.apiKey}`;
 
     const wsUrl = `${this.config.wsUrl}?${authParam}`;
@@ -42,7 +43,6 @@ export class GeminiLiveSession {
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      // Step 1: Try absolute minimum setup first
       const setup = {
         setup: {
           model: `models/${this.config.model}`,
@@ -50,7 +50,7 @@ export class GeminiLiveSession {
             responseModalities: ['AUDIO'],
           },
           systemInstruction: {
-            parts: [{ text: 'You are a Korean to Thai medical interpreter. Listen to Korean speech and respond with Thai translation. Translate only, no commentary.' }],
+            parts: [{ text: this.config.systemPrompt }],
           },
         },
       };
@@ -59,48 +59,57 @@ export class GeminiLiveSession {
     };
 
     this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data as string);
+      // Server may send Blob (binary) or string; normalize to text first
+      const parseMessage = (text: string) => {
+        try {
+          const msg = JSON.parse(text);
 
-        // Debug: show what we receive
-        const keys = Object.keys(msg);
-        this.callbacks.onError(`수신: ${keys.join(',')}`);
+          // Debug: show what we receive
+          const keys = Object.keys(msg);
+          this.callbacks.onError(`수신: ${keys.join(',')}`);
 
-        // Setup complete
-        if (msg.setupComplete !== undefined) {
-          this.callbacks.onStateChange('connected');
-          return;
-        }
+          // Setup complete — value is an empty object {}
+          if ('setupComplete' in msg) {
+            this.callbacks.onStateChange('connected');
+            return;
+          }
 
-        // Error from server
-        if (msg.error) {
-          this.callbacks.onError(`Gemini 에러: ${msg.error.message || JSON.stringify(msg.error)}`);
-          return;
-        }
+          // Error from server
+          if (msg.error) {
+            this.callbacks.onError(`Gemini 에러: ${msg.error.message || JSON.stringify(msg.error)}`);
+            return;
+          }
 
-        const sc = msg.serverContent;
-        if (!sc) return;
+          const sc = msg.serverContent;
+          if (!sc) return;
 
-        // Input transcription
-        if (sc.inputTranscription?.text) {
-          this.callbacks.onOriginalText(sc.inputTranscription.text);
-        }
+          // Input transcription
+          if (sc.inputTranscription?.text) {
+            this.callbacks.onOriginalText(sc.inputTranscription.text);
+          }
 
-        // Output transcription
-        if (sc.outputTranscription?.text) {
-          this.callbacks.onTranslatedText(sc.outputTranscription.text);
-        }
+          // Output transcription
+          if (sc.outputTranscription?.text) {
+            this.callbacks.onTranslatedText(sc.outputTranscription.text);
+          }
 
-        // Audio output
-        if (sc.modelTurn?.parts) {
-          for (const part of sc.modelTurn.parts) {
-            if (part.inlineData?.mimeType?.startsWith('audio/')) {
-              this.callbacks.onAudio(part.inlineData.data);
+          // Audio output
+          if (sc.modelTurn?.parts) {
+            for (const part of sc.modelTurn.parts) {
+              if (part.inlineData?.mimeType?.startsWith('audio/')) {
+                this.callbacks.onAudio(part.inlineData.data);
+              }
             }
           }
+        } catch {
+          // Ignore parse errors
         }
-      } catch {
-        // Ignore parse errors
+      };
+
+      if (event.data instanceof Blob) {
+        event.data.text().then(parseMessage);
+      } else {
+        parseMessage(event.data as string);
       }
     };
 
@@ -119,12 +128,13 @@ export class GeminiLiveSession {
 
   sendAudio(base64PcmChunk: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      // Use audio field (mediaChunks is deprecated)
       this.ws.send(JSON.stringify({
         realtimeInput: {
-          mediaChunks: [{
+          audio: {
             mimeType: 'audio/pcm;rate=16000',
             data: base64PcmChunk,
-          }],
+          },
         },
       }));
     }

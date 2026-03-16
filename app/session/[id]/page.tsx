@@ -59,7 +59,7 @@ export default function SessionPage() {
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | AudioWorkletNode | null>(null);
 
   // Play received audio (base64 PCM 24kHz from Gemini → AudioContext)
   const playAudio = useCallback(async (base64Audio: string) => {
@@ -146,10 +146,11 @@ export default function SessionPage() {
           return;
         }
 
-        // 3. Start audio capture (PCM 16kHz mono)
+        // 3. Start audio capture
+        // Note: avoid specifying sampleRate in constraints — mobile browsers may
+        // ignore or reject it. The AudioWorklet handles downsampling to 16kHz.
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            sampleRate: 16000,
             channelCount: 1,
             echoCancellation: true,
             noiseSuppression: true,
@@ -157,20 +158,46 @@ export default function SessionPage() {
         });
         streamRef.current = stream;
 
-        const audioContext = new AudioContext({ sampleRate: 16000 });
+        // Don't constrain sampleRate on AudioContext either — use native rate
+        // (typically 44100 or 48000) and let the worklet downsample to 16kHz.
+        const audioContext = new AudioContext();
         audioContextRef.current = audioContext;
         const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        processorRef.current = processor;
 
-        processor.onaudioprocess = (e) => {
-          const inputData = e.inputBuffer.getChannelData(0);
-          const base64Chunk = float32ToBase64Pcm(inputData);
-          session.sendAudio(base64Chunk);
-        };
+        if (audioContext.audioWorklet) {
+          // Modern path: AudioWorkletNode (non-deprecated, works on mobile)
+          await audioContext.audioWorklet.addModule('/audio-processor.js');
+          const workletNode = new AudioWorkletNode(audioContext, 'audio-processor', {
+            processorOptions: { targetSampleRate: 16000 },
+          });
+          processorRef.current = workletNode;
 
-        source.connect(processor);
-        processor.connect(audioContext.destination);
+          workletNode.port.onmessage = (e: MessageEvent<{ pcmData: ArrayBuffer }>) => {
+            const bytes = new Uint8Array(e.data.pcmData);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            const base64Chunk = btoa(binary);
+            session.sendAudio(base64Chunk);
+          };
+
+          source.connect(workletNode);
+          // Do NOT connect workletNode to destination — avoids echo from mic
+        } else {
+          // Legacy fallback: ScriptProcessorNode for browsers without AudioWorklet
+          const processor = audioContext.createScriptProcessor(4096, 1, 1);
+          processorRef.current = processor;
+
+          processor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0);
+            const base64Chunk = float32ToBase64Pcm(inputData);
+            session.sendAudio(base64Chunk);
+          };
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "연결에 실패했습니다.");
