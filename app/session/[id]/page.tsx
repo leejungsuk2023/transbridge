@@ -2,11 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
-import HalfDuplexPTT from "@/components/HalfDuplexPTT";
 import PrompterDisplay from "@/components/PrompterDisplay";
-import { PatientLang, SpeakerRole, PTTState, TranslateResponse } from "@/types";
+import { PatientLang, SpeakerRole } from "@/types";
+import { GeminiLiveSession, GeminiLiveConfig } from "@/lib/gemini-client";
 
-// -- Timer hook --
 function useSessionTimer() {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
@@ -18,77 +17,23 @@ function useSessionTimer() {
   return `${mm}:${ss}`;
 }
 
-// -- Audio recording hook --
-function useAudioRecorder() {
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const start = useCallback(async (): Promise<void> => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
-    const mediaRecorder = new MediaRecorder(stream);
-    mediaRecorderRef.current = mediaRecorder;
-    chunksRef.current = [];
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
-    mediaRecorder.start();
-  }, []);
-
-  const stop = useCallback((): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const mr = mediaRecorderRef.current;
-      if (!mr || mr.state === "inactive") {
-        reject(new Error("Not recording"));
-        return;
-      }
-      mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = (reader.result as string).split(",")[1];
-          resolve(base64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-      };
-      mr.stop();
-    });
-  }, []);
-
-  return { start, stop };
+// Convert Float32 audio samples to base64-encoded Int16 PCM
+function float32ToBase64Pcm(float32Array: Float32Array): string {
+  const int16Array = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  const bytes = new Uint8Array(int16Array.buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
-// -- Audio playback --
-async function playBase64Audio(base64: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    try {
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const audioCtx = new AudioContext();
-      audioCtx.decodeAudioData(bytes.buffer, (buffer) => {
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(audioCtx.destination);
-        source.onended = () => {
-          audioCtx.close();
-          resolve();
-        };
-        source.start();
-      }, (err) => {
-        audioCtx.close();
-        reject(err);
-      });
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
+type ConnectionState = "connecting" | "connected" | "disconnected";
 
-// -- Prompter state --
 interface PrompterState {
   text: string;
   glossaryTerms: string[];
@@ -105,105 +50,152 @@ export default function SessionPage() {
   const sessionId = params.id as string;
   const patientLang = (searchParams.get("lang") ?? "th") as PatientLang;
 
-  const [staffPTTState, setStaffPTTState] = useState<PTTState>("idle");
-  const [patientPTTState, setPatientPTTState] = useState<PTTState>("idle");
+  const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
 
   const timer = useSessionTimer();
-  const recorder = useAudioRecorder();
+  const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
 
-  // Request mic permission on mount
-  useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      stream.getTracks().forEach((t) => t.stop()); // Just checking permission
-    }).catch(() => {
-      setError("마이크 권한이 필요합니다.");
-    });
+  // Play received audio (base64 PCM 24kHz from Gemini → AudioContext)
+  const playAudio = useCallback(async (base64Audio: string) => {
+    try {
+      const binary = atob(base64Audio);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+      // Gemini returns PCM 16-bit mono 24kHz
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 0x8000;
+      }
+
+      const ctx = new AudioContext({ sampleRate: 24000 });
+      const buffer = ctx.createBuffer(1, float32.length, 24000);
+      buffer.getChannelData(0).set(float32);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start();
+      source.onended = () => ctx.close();
+    } catch {
+      // Ignore audio playback errors
+    }
   }, []);
+
+  // Initialize Gemini Live connection + audio capture
+  useEffect(() => {
+    let cancelled = false;
+
+    async function init() {
+      try {
+        // 1. Get Gemini connection config from server
+        const tokenRes = await fetch("/api/gemini-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sourceLang: "ko", // Primary language (staff)
+            targetLang: patientLang,
+          }),
+        });
+        const tokenData = await tokenRes.json();
+        if (!tokenData.success) throw new Error(tokenData.error ?? "Failed to get token");
+
+        if (cancelled) return;
+
+        const config: GeminiLiveConfig = tokenData.data;
+
+        // 2. Create Gemini Live session with callbacks
+        const session = new GeminiLiveSession(config, {
+          onOriginalText: (text) => {
+            // Korean detected → staff speaking; otherwise → patient speaking
+            const isKorean = /[\uac00-\ud7af]/.test(text);
+            if (isKorean) {
+              setStaffPrompter({ text, glossaryTerms: [], speaker: "staff" });
+            } else {
+              setPatientPrompter({ text, glossaryTerms: [], speaker: "patient" });
+            }
+          },
+          onTranslatedText: (text) => {
+            const isKorean = /[\uac00-\ud7af]/.test(text);
+            if (isKorean) {
+              // Translation is Korean → patient was speaking, staff sees translation
+              setStaffPrompter((prev) => ({ ...prev, text, speaker: "patient" }));
+            } else {
+              // Translation is Thai/Vi → staff was speaking, patient sees translation
+              setPatientPrompter((prev) => ({ ...prev, text, speaker: "staff" }));
+            }
+          },
+          onAudio: (base64Audio) => {
+            playAudio(base64Audio);
+          },
+          onError: (err) => setError(err),
+          onStateChange: (state) => setConnectionState(state as ConnectionState),
+        });
+
+        geminiSessionRef.current = session;
+        await session.connect();
+
+        if (cancelled) {
+          session.disconnect();
+          return;
+        }
+
+        // 3. Start audio capture (PCM 16kHz mono)
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        streamRef.current = stream;
+
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        audioContextRef.current = audioContext;
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
+
+        processor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          const base64Chunk = float32ToBase64Pcm(inputData);
+          session.sendAudio(base64Chunk);
+        };
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "연결에 실패했습니다.");
+          setConnectionState("disconnected");
+        }
+      }
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      processorRef.current?.disconnect();
+      audioContextRef.current?.close();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      geminiSessionRef.current?.disconnect();
+    };
+  }, [patientLang, playAudio]);
 
   const langLabel = patientLang === "th" ? "태국어" : "베트남어";
 
-  const isAnyActive = staffPTTState !== "idle" || patientPTTState !== "idle";
-
-  // Core recording + translate flow
-  const handleStartRecording = useCallback(async (speaker: SpeakerRole) => {
-    if (isAnyActive) return;
-    setError(null);
-
-    if (speaker === "staff") setStaffPTTState("recording");
-    else setPatientPTTState("recording");
-
-    try {
-      await recorder.start();
-    } catch {
-      setError("마이크를 시작할 수 없습니다.");
-      if (speaker === "staff") setStaffPTTState("idle");
-      else setPatientPTTState("idle");
-    }
-  }, [isAnyActive, recorder]);
-
-  const handleStopRecording = useCallback(async (speaker: SpeakerRole) => {
-    const currentState = speaker === "staff" ? staffPTTState : patientPTTState;
-    if (currentState !== "recording") return;
-
-    if (speaker === "staff") setStaffPTTState("processing");
-    else setPatientPTTState("processing");
-
-    try {
-      const base64Audio = await recorder.stop();
-
-      const body = {
-        audioData: base64Audio,
-        sourceLang: speaker === "staff" ? "ko" : patientLang,
-        targetLang: speaker === "staff" ? patientLang : "ko",
-        speaker,
-        sessionId,
-      };
-
-      const res = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const result: TranslateResponse = await res.json();
-
-      if (!result.success || !result.data) {
-        throw new Error(result.error ?? "번역 실패");
-      }
-
-      const { originalText, translatedText, audioData, glossaryTerms } = result.data;
-
-      // Update prompters: staff speaks → patient sees translation; patient speaks → staff sees translation
-      if (speaker === "staff") {
-        setPatientPrompter({ text: translatedText, glossaryTerms, speaker: "staff" });
-        setStaffPrompter({ text: originalText, glossaryTerms: [], speaker: "staff" });
-      } else {
-        setStaffPrompter({ text: translatedText, glossaryTerms, speaker: "patient" });
-        setPatientPrompter({ text: originalText, glossaryTerms: [], speaker: "patient" });
-      }
-
-      // Play TTS — both buttons disabled during playback
-      if (speaker === "staff") setStaffPTTState("playing");
-      else setPatientPTTState("playing");
-
-      try {
-        await playBase64Audio(audioData);
-      } catch {
-        // Silently ignore audio decode errors (API may return empty for dev)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "오류가 발생했습니다.");
-    } finally {
-      if (speaker === "staff") setStaffPTTState("idle");
-      else setPatientPTTState("idle");
-    }
-  }, [staffPTTState, patientPTTState, recorder, patientLang, sessionId]);
-
   const handleEndSession = async () => {
     if (!confirm("통역을 종료하시겠습니까?")) return;
+    geminiSessionRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     try {
       await fetch(`/api/session/${sessionId}`, {
         method: "PATCH",
@@ -211,21 +203,37 @@ export default function SessionPage() {
         body: JSON.stringify({ status: "ended" }),
       });
     } catch {
-      // Ignore — navigate regardless
+      // Navigate regardless
     }
     router.push("/dashboard");
   };
 
-  const bothDisabled = staffPTTState === "playing" || patientPTTState === "playing";
+  const stateLabel =
+    connectionState === "connecting"
+      ? "연결 중..."
+      : connectionState === "connected"
+      ? "듣는 중..."
+      : "연결 끊김";
+
+  const stateColor =
+    connectionState === "connected"
+      ? "bg-green-400"
+      : connectionState === "connecting"
+      ? "bg-yellow-400"
+      : "bg-red-400";
 
   return (
     <div className="fixed inset-0 bg-gray-950 flex flex-col overflow-hidden">
       {/* Status bar */}
       <div className="flex-none flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
         <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-green-400" />
+          <span
+            className={`w-2 h-2 rounded-full ${stateColor} ${
+              connectionState === "connected" ? "animate-pulse" : ""
+            }`}
+          />
           <span className="text-sm text-gray-300 font-medium">
-            연결됨 &bull; {langLabel} ↔ 한국어
+            {langLabel} ↔ 한국어
           </span>
         </div>
         <button
@@ -240,53 +248,45 @@ export default function SessionPage() {
       {error && (
         <div className="flex-none bg-red-900/80 text-red-200 text-sm px-4 py-2 flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4">✕</button>
+          <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4">
+            ✕
+          </button>
         </div>
       )}
 
       {/* Patient area (top 45%) */}
-      <div className="flex-1 flex flex-col min-h-0 p-3 gap-3">
-        {/* Patient PTT */}
-        <div className="flex-none">
-          <HalfDuplexPTT
-            onStartRecording={handleStartRecording}
-            onStopRecording={handleStopRecording}
-            staffState={staffPTTState}
-            patientState={patientPTTState}
-            patientLang={patientLang}
-            disabled={bothDisabled}
-          />
-        </div>
-
-        {/* Patient prompter */}
-        <div className="flex-1 min-h-0">
-          <PrompterDisplay
-            text={patientPrompter.text}
-            glossaryTerms={patientPrompter.glossaryTerms}
-            speaker={patientPrompter.speaker}
-            lang={patientLang}
-          />
-        </div>
+      <div className="flex-1 flex flex-col min-h-0 p-3">
+        <PrompterDisplay
+          text={patientPrompter.text}
+          glossaryTerms={patientPrompter.glossaryTerms}
+          speaker={patientPrompter.speaker}
+          lang={patientLang}
+        />
       </div>
 
       {/* Divider */}
       <div className="flex-none h-px bg-gray-700 mx-4" />
 
       {/* Staff area (bottom 45%) */}
-      <div className="flex-1 flex flex-col min-h-0 p-3 gap-3">
-        {/* Staff prompter */}
-        <div className="flex-1 min-h-0">
-          <PrompterDisplay
-            text={staffPrompter.text}
-            glossaryTerms={staffPrompter.glossaryTerms}
-            speaker={staffPrompter.speaker}
-            lang={patientLang}
-          />
-        </div>
+      <div className="flex-1 flex flex-col min-h-0 p-3">
+        <PrompterDisplay
+          text={staffPrompter.text}
+          glossaryTerms={staffPrompter.glossaryTerms}
+          speaker={staffPrompter.speaker}
+          lang={patientLang}
+        />
       </div>
 
-      {/* Timer footer */}
-      <div className="flex-none flex items-center justify-center py-2 bg-gray-900 border-t border-gray-800">
+      {/* Status footer */}
+      <div className="flex-none flex items-center justify-between px-4 py-2 bg-gray-900 border-t border-gray-800">
+        <div className="flex items-center gap-2">
+          <span
+            className={`w-2 h-2 rounded-full ${stateColor} ${
+              connectionState === "connected" ? "animate-pulse" : ""
+            }`}
+          />
+          <span className="text-xs text-gray-400">🎤 {stateLabel}</span>
+        </div>
         <span className="text-xs text-gray-500 font-mono">{timer}</span>
       </div>
     </div>
