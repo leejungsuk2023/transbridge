@@ -225,39 +225,19 @@ export default function SessionPage() {
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
-            // Append to existing text (don't overwrite)
             const isKorean = /[\uac00-\ud7af]/.test(text);
             if (isKorean) {
-              setStaffPrompter((prev) => ({
-                ...prev,
-                text: prev.speaker === "staff" ? prev.text + text : text,
-                glossaryTerms: [],
-                speaker: "staff",
-              }));
+              setStaffPrompter({ text, glossaryTerms: [], speaker: "staff" });
             } else {
-              setPatientPrompter((prev) => ({
-                ...prev,
-                text: prev.speaker === "patient" ? prev.text + text : text,
-                glossaryTerms: [],
-                speaker: "patient",
-              }));
+              setPatientPrompter({ text, glossaryTerms: [], speaker: "patient" });
             }
           },
           onTranslatedText: (text) => {
-            // Append translated text
             const isKorean = /[\uac00-\ud7af]/.test(text);
             if (isKorean) {
-              setStaffPrompter((prev) => ({
-                ...prev,
-                text: prev.speaker === "patient" ? prev.text + text : text,
-                speaker: "patient",
-              }));
+              setStaffPrompter((prev) => ({ ...prev, text, speaker: "patient" }));
             } else {
-              setPatientPrompter((prev) => ({
-                ...prev,
-                text: prev.speaker === "staff" ? prev.text + text : text,
-                speaker: "staff",
-              }));
+              setPatientPrompter((prev) => ({ ...prev, text, speaker: "staff" }));
             }
           },
           onAudio: (data: ArrayBuffer) => {
