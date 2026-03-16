@@ -1,21 +1,24 @@
 /**
- * GET /api/session/list?hospitalId=xxx&limit=20&offset=0
- * Returns paginated sessions for a hospital, ordered by startedAt descending.
+ * GET /api/session/list?limit=20&offset=0
+ * Returns paginated sessions for the authenticated hospital, ordered by started_at descending.
  * Auth required.
  */
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { adminAuth, adminDb } from '@/lib/firebase-admin';
+import { getSupabaseAdmin } from '@/lib/supabase';
 import type { Session } from '@/types';
 
+/** Verify Supabase JWT from Authorization header and return the user id */
 async function verifyToken(req: NextRequest): Promise<string | null> {
   const authHeader = req.headers.get('authorization') || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    return decoded.uid;
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return null;
+    return data.user.id;
   } catch {
     return null;
   }
@@ -23,47 +26,58 @@ async function verifyToken(req: NextRequest): Promise<string | null> {
 
 export async function GET(req: NextRequest) {
   try {
-    const uid = await verifyToken(req);
-    if (!uid) {
+    const authUserId = await verifyToken(req);
+    if (!authUserId) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const supabase = getSupabaseAdmin();
+
+    // Get hospital id for this user
+    const { data: hospital, error: hospitalError } = await supabase
+      .from('hospitals')
+      .select('id')
+      .eq('auth_user_id', authUserId)
+      .single();
+
+    if (hospitalError || !hospital) {
+      return NextResponse.json({ success: false, error: 'Hospital not found' }, { status: 404 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const hospitalId = searchParams.get('hospitalId') || uid;
     const limit = Math.min(parseInt(searchParams.get('limit') || '20', 10), 100);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 
     // Count total matching sessions
-    const countSnap = await adminDb
-      .collection('sessions')
-      .where('hospitalId', '==', hospitalId)
-      .count()
-      .get();
-    const total = countSnap.data().count;
+    const { count: total } = await supabase
+      .from('sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('hospital_id', hospital.id);
 
-    // Fetch paginated sessions ordered by startedAt descending
-    const snap = await adminDb
-      .collection('sessions')
-      .where('hospitalId', '==', hospitalId)
-      .orderBy('startedAt', 'desc')
-      .offset(offset)
-      .limit(limit)
-      .get();
+    // Fetch paginated sessions ordered by started_at descending
+    const { data: rows, error: listError } = await supabase
+      .from('sessions')
+      .select('id, hospital_id, patient_lang, status, started_at, ended_at, duration_sec')
+      .eq('hospital_id', hospital.id)
+      .order('started_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    const sessions: Session[] = snap.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        hospitalId: data.hospitalId,
-        patientLang: data.patientLang,
-        status: data.status,
-        startedAt: new Date(data.startedAt),
-        ...(data.endedAt && { endedAt: new Date(data.endedAt) }),
-        ...(data.durationSec !== undefined && { durationSec: data.durationSec }),
-      };
-    });
+    if (listError) {
+      console.error('[GET /api/session/list] Query error:', listError);
+      return NextResponse.json({ success: false, error: 'Failed to fetch sessions' }, { status: 500 });
+    }
 
-    return NextResponse.json({ success: true, data: { sessions, total } });
+    const sessions: Session[] = (rows ?? []).map((row) => ({
+      id: row.id,
+      hospitalId: row.hospital_id,
+      patientLang: row.patient_lang,
+      status: row.status,
+      startedAt: new Date(row.started_at),
+      ...(row.ended_at && { endedAt: new Date(row.ended_at) }),
+      ...(row.duration_sec !== null && row.duration_sec !== undefined && { durationSec: row.duration_sec }),
+    }));
+
+    return NextResponse.json({ success: true, data: { sessions, total: total ?? 0 } });
   } catch (error) {
     console.error('[GET /api/session/list] Error:', error);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });

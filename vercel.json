@@ -1,9 +1,4 @@
 {
   "framework": "nextjs",
-  "regions": ["icn1"],
-  "env": {
-    "GEMINI_API_KEY": "@gemini-api-key",
-    "FIREBASE_ADMIN_CLIENT_EMAIL": "@firebase-admin-client-email",
-    "FIREBASE_ADMIN_PRIVATE_KEY": "@firebase-admin-private-key"
-  }
+  "regions": ["icn1"]
 }

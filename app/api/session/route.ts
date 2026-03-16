@@ -7,48 +7,76 @@
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { v4 as uuidv4 } from 'uuid';
-import { adminAuth, adminDb } from '@/lib/firebase-admin';
+import { getSupabaseAdmin } from '@/lib/supabase';
 import type { Session } from '@/types';
 
-/** Verify Firebase ID token from Authorization header and return the UID */
+/** Verify Supabase JWT from Authorization header and return the user id */
 async function verifyToken(req: NextRequest): Promise<string | null> {
   const authHeader = req.headers.get('authorization') || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    return decoded.uid;
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return null;
+    return data.user.id;
   } catch {
     return null;
   }
 }
 
+/** Get hospital record for the authenticated user */
+async function getHospitalId(authUserId: string): Promise<string | null> {
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase
+    .from('hospitals')
+    .select('id')
+    .eq('auth_user_id', authUserId)
+    .single();
+  return data?.id ?? null;
+}
+
 // ── POST: Create session ─────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const uid = await verifyToken(req);
-    if (!uid) {
+    const authUserId = await verifyToken(req);
+    if (!authUserId) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const sessionId = uuidv4();
-    const now = new Date();
+    const hospitalId = await getHospitalId(authUserId);
+    if (!hospitalId) {
+      return NextResponse.json({ success: false, error: 'Hospital not found' }, { status: 404 });
+    }
 
-    const sessionData = {
-      id: sessionId,
-      hospitalId: uid,
-      patientLang: null,
-      status: 'waiting' as const,
-      startedAt: now,
+    const body = await req.json().catch(() => ({}));
+    const patientLang = body.patientLang ?? null;
+
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('sessions')
+      .insert({
+        hospital_id: hospitalId,
+        patient_lang: patientLang,
+        status: 'waiting',
+      })
+      .select('id, hospital_id, patient_lang, status, started_at')
+      .single();
+
+    if (error || !data) {
+      console.error('[POST /api/session] Insert error:', error);
+      return NextResponse.json({ success: false, error: 'Failed to create session' }, { status: 500 });
+    }
+
+    const session: Session = {
+      id: data.id,
+      hospitalId: data.hospital_id,
+      patientLang: data.patient_lang,
+      status: data.status,
+      startedAt: new Date(data.started_at),
     };
 
-    await adminDb.collection('sessions').doc(sessionId).set({
-      ...sessionData,
-      startedAt: now.toISOString(),
-    });
-
-    return NextResponse.json({ success: true, data: { session: sessionData } }, { status: 201 });
+    return NextResponse.json({ success: true, data: { session } }, { status: 201 });
   } catch (error) {
     console.error('[POST /api/session] Error:', error);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
@@ -65,21 +93,25 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Session ID is required' }, { status: 400 });
     }
 
-    const doc = await adminDb.collection('sessions').doc(id).get();
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('sessions')
+      .select('id, hospital_id, patient_lang, status, started_at, ended_at, duration_sec')
+      .eq('id', id)
+      .single();
 
-    if (!doc.exists) {
+    if (error || !data) {
       return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404 });
     }
 
-    const data = doc.data()!;
     const session: Session = {
-      id: doc.id,
-      hospitalId: data.hospitalId,
-      patientLang: data.patientLang,
+      id: data.id,
+      hospitalId: data.hospital_id,
+      patientLang: data.patient_lang,
       status: data.status,
-      startedAt: new Date(data.startedAt),
-      ...(data.endedAt && { endedAt: new Date(data.endedAt) }),
-      ...(data.durationSec !== undefined && { durationSec: data.durationSec }),
+      startedAt: new Date(data.started_at),
+      ...(data.ended_at && { endedAt: new Date(data.ended_at) }),
+      ...(data.duration_sec !== null && data.duration_sec !== undefined && { durationSec: data.duration_sec }),
     };
 
     return NextResponse.json({ success: true, data: { session } });
@@ -101,39 +133,52 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const docRef = adminDb.collection('sessions').doc(id);
-    const doc = await docRef.get();
+    const supabase = getSupabaseAdmin();
 
-    if (!doc.exists) {
+    // Fetch current session to calculate duration
+    const { data: existing, error: fetchError } = await supabase
+      .from('sessions')
+      .select('id, started_at')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existing) {
       return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404 });
     }
 
     const updates: Record<string, unknown> = { status };
 
-    if (patientLang) {
-      updates.patientLang = patientLang;
+    if (patientLang !== undefined) {
+      updates.patient_lang = patientLang;
     }
 
     if (status === 'ended') {
-      const startedAt = new Date(doc.data()!.startedAt);
+      const startedAt = new Date(existing.started_at);
       const endedAt = new Date();
-      const durationSec = Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000);
-      updates.endedAt = endedAt.toISOString();
-      updates.durationSec = durationSec;
+      updates.ended_at = endedAt.toISOString();
+      updates.duration_sec = Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000);
     }
 
-    await docRef.update(updates);
+    const { data, error } = await supabase
+      .from('sessions')
+      .update(updates)
+      .eq('id', id)
+      .select('id, hospital_id, patient_lang, status, started_at, ended_at, duration_sec')
+      .single();
 
-    const updated = await docRef.get();
-    const data = updated.data()!;
+    if (error || !data) {
+      console.error('[PATCH /api/session] Update error:', error);
+      return NextResponse.json({ success: false, error: 'Failed to update session' }, { status: 500 });
+    }
+
     const session: Session = {
-      id: updated.id,
-      hospitalId: data.hospitalId,
-      patientLang: data.patientLang,
+      id: data.id,
+      hospitalId: data.hospital_id,
+      patientLang: data.patient_lang,
       status: data.status,
-      startedAt: new Date(data.startedAt),
-      ...(data.endedAt && { endedAt: new Date(data.endedAt) }),
-      ...(data.durationSec !== undefined && { durationSec: data.durationSec }),
+      startedAt: new Date(data.started_at),
+      ...(data.ended_at && { endedAt: new Date(data.ended_at) }),
+      ...(data.duration_sec !== null && data.duration_sec !== undefined && { durationSec: data.duration_sec }),
     };
 
     return NextResponse.json({ success: true, data: { session } });

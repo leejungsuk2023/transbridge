@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
-import { app as firebaseApp } from "@/lib/firebase";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,15 +14,22 @@ export default function LoginPage() {
 
   // Redirect if already logged in
   useEffect(() => {
-    const auth = getAuth(firebaseApp);
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
         router.replace("/dashboard");
       } else {
         setCheckingAuth(false);
       }
     });
-    return () => unsubscribe();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        router.replace("/dashboard");
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -37,18 +43,21 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const auth = getAuth(firebaseApp);
-      await signInWithEmailAndPassword(auth, email, password);
-      router.push("/dashboard");
-    } catch (err: unknown) {
-      const code = (err as { code?: string }).code;
-      if (code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found") {
-        setError("이메일 또는 비밀번호가 올바르지 않습니다.");
-      } else if (code === "auth/too-many-requests") {
-        setError("너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.");
-      } else {
-        setError("로그인 중 오류가 발생했습니다.");
+      const supabase = getSupabaseBrowserClient();
+      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      if (authError) {
+        if (authError.message.toLowerCase().includes("invalid")) {
+          setError("이메일 또는 비밀번호가 올바르지 않습니다.");
+        } else if (authError.message.toLowerCase().includes("rate")) {
+          setError("너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.");
+        } else {
+          setError("로그인 중 오류가 발생했습니다.");
+        }
+        return;
       }
+      router.push("/dashboard");
+    } catch {
+      setError("로그인 중 오류가 발생했습니다.");
     } finally {
       setLoading(false);
     }

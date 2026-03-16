@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 import { PatientLang } from "@/types";
 
 const mockSessions = [
@@ -44,7 +45,8 @@ export default function DashboardPage() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await getSupabaseBrowserClient().auth.signOut();
     router.push("/");
   };
 

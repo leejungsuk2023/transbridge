@@ -1,11 +1,11 @@
 /**
  * POST /api/auth
- * Authenticates a hospital user with Firebase email/password and returns a token.
+ * Authenticates a hospital user with Supabase Auth and returns a session token.
  */
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
+import { getSupabaseAdmin } from '@/lib/supabase';
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,50 +18,42 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Firebase Admin SDK does not support sign-in directly.
-    // We use the Firebase REST API to verify credentials, then create a custom token.
-    const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-    const signInRes = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, returnSecureToken: true }),
-      }
-    );
+    const supabase = getSupabaseAdmin();
 
-    if (!signInRes.ok) {
-      const err = await signInRes.json();
-      const message = err?.error?.message || 'Invalid credentials';
+    // Sign in with Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (authError || !authData.user) {
       return NextResponse.json(
-        { success: false, error: message },
+        { success: false, error: authError?.message ?? 'Invalid credentials' },
         { status: 401 }
       );
     }
 
-    const { idToken, localId: uid } = await signInRes.json();
+    // Get the hospital record linked to this auth user
+    const { data: hospital, error: hospitalError } = await supabase
+      .from('hospitals')
+      .select('id, name, email, plan')
+      .eq('auth_user_id', authData.user.id)
+      .single();
 
-    // Fetch the hospital document linked to this Firebase user UID
-    const hospitalDoc = await adminDb.collection('hospitals').doc(uid).get();
-
-    if (!hospitalDoc.exists) {
+    if (hospitalError || !hospital) {
       return NextResponse.json(
         { success: false, error: 'Hospital account not found' },
         { status: 404 }
       );
     }
 
-    const hospitalData = hospitalDoc.data()!;
-    const hospital = {
-      id: hospitalDoc.id,
-      name: hospitalData.name,
-      email: hospitalData.email,
-      plan: hospitalData.plan,
-    };
-
     return NextResponse.json({
       success: true,
-      data: { token: idToken, hospital },
+      data: {
+        token: authData.session?.access_token,
+        user: { id: authData.user.id, email: authData.user.email },
+        hospital,
+      },
     });
   } catch (error) {
     console.error('[POST /api/auth] Error:', error);
