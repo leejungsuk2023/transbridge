@@ -49,12 +49,12 @@ export class GeminiLiveSession {
       const setupMsg = {
         setup: {
           model: `models/${this.config.model}`,
-          responseModalities: ['AUDIO'],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+          },
           systemInstruction: {
             parts: [{ text: this.config.systemPrompt }],
           },
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
         },
       };
       this.ws!.send(JSON.stringify(setupMsg));
