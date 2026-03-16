@@ -27,6 +27,14 @@ yarn-error.log*
 
 # local env files
 .env*.local
+.env
+.env.production
+
+# Service account credentials
+service-account.json
+
+# Docker overrides
+docker-compose.override.yml
 
 # vercel
 .vercel
