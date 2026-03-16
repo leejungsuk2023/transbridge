@@ -55,6 +55,8 @@ export class GeminiLiveSession {
           systemInstruction: {
             parts: [{ text: this.config.systemPrompt }],
           },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
         },
       };
       this.ws!.send(JSON.stringify(setupMsg));
