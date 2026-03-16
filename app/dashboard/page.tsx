@@ -27,14 +27,20 @@ export default function DashboardPage() {
     if (!selectedLang) return;
     setStarting(true);
     try {
-      // Create a new session via API
+      // Get current session token from Supabase
+      const { data: { session } } = await getSupabaseBrowserClient().auth.getSession();
+      const token = session?.access_token;
+
       const res = await fetch("/api/session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ patientLang: selectedLang }),
       });
       const data = await res.json();
-      const sessionId = data.sessionId ?? `sess_${Date.now()}`;
+      const sessionId = data.sessionId ?? data.data?.id ?? `sess_${Date.now()}`;
       router.push(`/session/${sessionId}?lang=${selectedLang}`);
     } catch {
       // Fallback: use local ID if API fails

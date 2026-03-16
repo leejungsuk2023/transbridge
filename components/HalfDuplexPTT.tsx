@@ -92,9 +92,13 @@ function PTTButton({ state, label, sublabel, isDisabled, onStart, onStop, colorS
   return (
     <div className="flex flex-col items-center gap-3 w-full">
       <button
-        onPointerDown={isDisabled ? undefined : onStart}
-        onPointerUp={isDisabled ? undefined : onStop}
-        onPointerLeave={isDisabled ? undefined : onStop}
+        onClick={isDisabled ? undefined : () => {
+          if (state === 'recording') {
+            onStop();
+          } else if (state === 'idle') {
+            onStart();
+          }
+        }}
         disabled={isDisabled}
         className={`
           w-full min-h-[80px] rounded-2xl flex items-center justify-center gap-4
