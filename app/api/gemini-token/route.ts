@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
         success: true,
         data: {
           apiKey: apiKey,
-          model: 'gemini-2.0-flash-live-001',
+          model: 'gemini-2.5-flash-native-audio-preview-12-2025',
           systemPrompt,
           wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
         },
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       success: true,
       data: {
         ephemeralToken: tokenData.ephemeralToken?.token,
-        model: 'gemini-2.0-flash-live-001',
+        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         systemPrompt,
         wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
       },

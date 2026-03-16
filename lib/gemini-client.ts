@@ -42,15 +42,12 @@ export class GeminiLiveSession {
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      // Send setup message
+      // Minimal setup for native audio model
       const setup = {
         setup: {
           model: `models/${this.config.model}`,
           generationConfig: {
             responseModalities: ['AUDIO'],
-            speechConfig: {
-              voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } },
-            },
           },
           systemInstruction: {
             parts: [{ text: this.config.systemPrompt }],
@@ -58,7 +55,7 @@ export class GeminiLiveSession {
         },
       };
       this.ws!.send(JSON.stringify(setup));
-      this.callbacks.onError('WS open, setup 전송됨');
+      this.callbacks.onError(`setup 전송: ${this.config.model}`);
     };
 
     this.ws.onmessage = (event) => {
