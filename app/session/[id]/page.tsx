@@ -225,22 +225,39 @@ export default function SessionPage() {
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
-            // Korean script → staff speaking; otherwise → patient speaking
+            // Append to existing text (don't overwrite)
             const isKorean = /[\uac00-\ud7af]/.test(text);
             if (isKorean) {
-              setStaffPrompter({ text, glossaryTerms: [], speaker: "staff" });
+              setStaffPrompter((prev) => ({
+                ...prev,
+                text: prev.speaker === "staff" ? prev.text + text : text,
+                glossaryTerms: [],
+                speaker: "staff",
+              }));
             } else {
-              setPatientPrompter({ text, glossaryTerms: [], speaker: "patient" });
+              setPatientPrompter((prev) => ({
+                ...prev,
+                text: prev.speaker === "patient" ? prev.text + text : text,
+                glossaryTerms: [],
+                speaker: "patient",
+              }));
             }
           },
           onTranslatedText: (text) => {
+            // Append translated text
             const isKorean = /[\uac00-\ud7af]/.test(text);
             if (isKorean) {
-              // Translation is Korean → patient was speaking, staff sees translation
-              setStaffPrompter((prev) => ({ ...prev, text, speaker: "patient" }));
+              setStaffPrompter((prev) => ({
+                ...prev,
+                text: prev.speaker === "patient" ? prev.text + text : text,
+                speaker: "patient",
+              }));
             } else {
-              // Translation is Thai/Vi → staff was speaking, patient sees translation
-              setPatientPrompter((prev) => ({ ...prev, text, speaker: "staff" }));
+              setPatientPrompter((prev) => ({
+                ...prev,
+                text: prev.speaker === "staff" ? prev.text + text : text,
+                speaker: "staff",
+              }));
             }
           },
           onAudio: (data: ArrayBuffer) => {
