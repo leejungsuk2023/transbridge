@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import PrompterDisplay from "@/components/PrompterDisplay";
 import { PatientLang, SpeakerRole } from "@/types";
-import { GeminiLiveSession, GeminiLiveConfig } from "@/lib/gemini-client";
+import {
+  GeminiLiveSession,
+  GeminiLiveConfig,
+  arrayBufferToBase64,
+} from "@/lib/gemini-client";
 
+// ---------------------------------------------------------------------------
+// Session timer hook
+// ---------------------------------------------------------------------------
 function useSessionTimer() {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
@@ -17,21 +24,141 @@ function useSessionTimer() {
   return `${mm}:${ss}`;
 }
 
-// Convert Float32 audio samples to base64-encoded Int16 PCM
-function float32ToBase64Pcm(float32Array: Float32Array): string {
-  const int16Array = new Int16Array(float32Array.length);
-  for (let i = 0; i < float32Array.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32Array[i]));
-    int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+// ---------------------------------------------------------------------------
+// AudioStreamer — matches Google's reference audio-streamer.ts
+// Accepts raw PCM16 ArrayBuffer chunks and plays them via Web Audio API.
+// ---------------------------------------------------------------------------
+class AudioStreamer {
+  private sampleRate = 24000; // Gemini outputs 24kHz PCM
+  private bufferSize = 7680;
+  private audioQueue: Float32Array[] = [];
+  private isPlaying = false;
+  private isStreamComplete = false;
+  private checkInterval: ReturnType<typeof setInterval> | null = null;
+  private scheduledTime = 0;
+  private initialBufferTime = 0.1; // 100ms initial buffer
+  private gainNode: GainNode;
+  private endOfQueueAudioSource: AudioBufferSourceNode | null = null;
+  public onComplete = () => {};
+
+  constructor(private context: AudioContext) {
+    this.gainNode = this.context.createGain();
+    this.gainNode.connect(this.context.destination);
   }
-  const bytes = new Uint8Array(int16Array.buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+
+  /**
+   * Convert PCM16 Uint8Array to normalized Float32Array.
+   * Matches _processPCM16Chunk from the reference exactly.
+   */
+  private processPCM16Chunk(chunk: Uint8Array): Float32Array {
+    const float32 = new Float32Array(chunk.length / 2);
+    const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    for (let i = 0; i < float32.length; i++) {
+      float32[i] = view.getInt16(i * 2, true) / 32768;
+    }
+    return float32;
   }
-  return btoa(binary);
+
+  addPCM16(chunk: Uint8Array) {
+    this.isStreamComplete = false;
+    let buf = this.processPCM16Chunk(chunk);
+    while (buf.length >= this.bufferSize) {
+      this.audioQueue.push(buf.slice(0, this.bufferSize));
+      buf = buf.slice(this.bufferSize);
+    }
+    if (buf.length > 0) this.audioQueue.push(buf);
+
+    if (!this.isPlaying) {
+      this.isPlaying = true;
+      this.scheduledTime = this.context.currentTime + this.initialBufferTime;
+      this.scheduleNextBuffer();
+    }
+  }
+
+  private createAudioBuffer(data: Float32Array): AudioBuffer {
+    const buf = this.context.createBuffer(1, data.length, this.sampleRate);
+    buf.getChannelData(0).set(data);
+    return buf;
+  }
+
+  private scheduleNextBuffer() {
+    const SCHEDULE_AHEAD = 0.2;
+    while (
+      this.audioQueue.length > 0 &&
+      this.scheduledTime < this.context.currentTime + SCHEDULE_AHEAD
+    ) {
+      const data = this.audioQueue.shift()!;
+      const audioBuf = this.createAudioBuffer(data);
+      const source = this.context.createBufferSource();
+
+      if (this.audioQueue.length === 0) {
+        if (this.endOfQueueAudioSource) this.endOfQueueAudioSource.onended = null;
+        this.endOfQueueAudioSource = source;
+        source.onended = () => {
+          if (!this.audioQueue.length && this.endOfQueueAudioSource === source) {
+            this.endOfQueueAudioSource = null;
+            this.onComplete();
+          }
+        };
+      }
+
+      source.buffer = audioBuf;
+      source.connect(this.gainNode);
+      const startTime = Math.max(this.scheduledTime, this.context.currentTime);
+      source.start(startTime);
+      this.scheduledTime = startTime + audioBuf.duration;
+    }
+
+    if (this.audioQueue.length === 0) {
+      if (this.isStreamComplete) {
+        this.isPlaying = false;
+        if (this.checkInterval) {
+          clearInterval(this.checkInterval);
+          this.checkInterval = null;
+        }
+      } else if (!this.checkInterval) {
+        this.checkInterval = setInterval(() => {
+          if (this.audioQueue.length > 0) this.scheduleNextBuffer();
+        }, 100);
+      }
+    } else {
+      const nextCheck = (this.scheduledTime - this.context.currentTime) * 1000;
+      setTimeout(() => this.scheduleNextBuffer(), Math.max(0, nextCheck - 50));
+    }
+  }
+
+  stop() {
+    this.isPlaying = false;
+    this.isStreamComplete = true;
+    this.audioQueue = [];
+    this.scheduledTime = this.context.currentTime;
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+    this.gainNode.gain.linearRampToValueAtTime(0, this.context.currentTime + 0.1);
+    setTimeout(() => {
+      this.gainNode.disconnect();
+      this.gainNode = this.context.createGain();
+      this.gainNode.connect(this.context.destination);
+    }, 200);
+  }
+
+  async resume() {
+    if (this.context.state === "suspended") await this.context.resume();
+    this.isStreamComplete = false;
+    this.scheduledTime = this.context.currentTime + this.initialBufferTime;
+    this.gainNode.gain.setValueAtTime(1, this.context.currentTime);
+  }
+
+  complete() {
+    this.isStreamComplete = true;
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 type ConnectionState = "connecting" | "connected" | "disconnected";
 
 interface PrompterState {
@@ -42,6 +169,9 @@ interface PrompterState {
 
 const EMPTY_PROMPTER: PrompterState = { text: "", glossaryTerms: [], speaker: "staff" };
 
+// ---------------------------------------------------------------------------
+// SessionPage component
+// ---------------------------------------------------------------------------
 export default function SessionPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -59,62 +189,43 @@ export default function SessionPage() {
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | AudioWorkletNode | null>(null);
-
-  // Play received audio (base64 PCM 24kHz from Gemini → AudioContext)
-  const playAudio = useCallback(async (base64Audio: string) => {
-    try {
-      const binary = atob(base64Audio);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-      // Gemini returns PCM 16-bit mono 24kHz
-      const int16 = new Int16Array(bytes.buffer);
-      const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 0x8000;
-      }
-
-      const ctx = new AudioContext({ sampleRate: 24000 });
-      const buffer = ctx.createBuffer(1, float32.length, 24000);
-      buffer.getChannelData(0).set(float32);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.start();
-      source.onended = () => ctx.close();
-    } catch {
-      // Ignore audio playback errors
-    }
-  }, []);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
 
   // Initialize Gemini Live connection + audio capture
+  // Matches the pattern from LiveAPIContext.tsx + AudioRecorder.ts in the reference
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
       try {
-        // 1. Get Gemini connection config from server
+        // 1. Get connection config from server (API key or ephemeral token)
         const tokenRes = await fetch("/api/gemini-token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sourceLang: "ko", // Primary language (staff)
-            targetLang: patientLang,
-          }),
+          body: JSON.stringify({ sourceLang: "ko", targetLang: patientLang }),
         });
         const tokenData = await tokenRes.json();
         if (!tokenData.success) throw new Error(tokenData.error ?? "Failed to get token");
-
         if (cancelled) return;
 
         const config: GeminiLiveConfig = tokenData.data;
 
-        // 2. Create Gemini Live session with callbacks
+        // 2. Create AudioContext at 16kHz — the reference AudioRecorder sets sampleRate: 16000
+        //    so no downsampling is needed in the worklet.
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        audioContextRef.current = audioContext;
+
+        // 3. Create AudioStreamer for playback (reference audio-streamer.ts)
+        const streamer = new AudioStreamer(new AudioContext({ sampleRate: 24000 }));
+        audioStreamerRef.current = streamer;
+        await streamer.resume();
+
+        // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
-            // Korean detected → staff speaking; otherwise → patient speaking
+            // Korean script → staff speaking; otherwise → patient speaking
             const isKorean = /[\uac00-\ud7af]/.test(text);
             if (isKorean) {
               setStaffPrompter({ text, glossaryTerms: [], speaker: "staff" });
@@ -132,8 +243,9 @@ export default function SessionPage() {
               setPatientPrompter((prev) => ({ ...prev, text, speaker: "staff" }));
             }
           },
-          onAudio: (base64Audio) => {
-            playAudio(base64Audio);
+          onAudio: (data: ArrayBuffer) => {
+            // Feed raw PCM16 ArrayBuffer into the streamer queue
+            streamer.addPCM16(new Uint8Array(data));
           },
           onError: (err) => setError(err),
           onStateChange: (state) => setConnectionState(state as ConnectionState),
@@ -141,68 +253,38 @@ export default function SessionPage() {
 
         geminiSessionRef.current = session;
         await session.connect();
+        if (cancelled) { session.disconnect(); return; }
 
-        if (cancelled) {
-          session.disconnect();
-          return;
-        }
-
-        // 3. Start audio capture
-        // Note: avoid specifying sampleRate in constraints — mobile browsers may
-        // ignore or reject it. The AudioWorklet handles downsampling to 16kHz.
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
+        // 5. Start microphone capture
+        //    Reference AudioRecorder uses { audio: true } without extra constraints
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         streamRef.current = stream;
 
-        // Don't constrain sampleRate on AudioContext either — use native rate
-        // (typically 44100 or 48000) and let the worklet downsample to 16kHz.
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
         const source = audioContext.createMediaStreamSource(stream);
 
-        if (audioContext.audioWorklet) {
-          // Modern path: AudioWorkletNode (non-deprecated, works on mobile)
-          await audioContext.audioWorklet.addModule('/audio-processor.js');
-          const workletNode = new AudioWorkletNode(audioContext, 'audio-processor', {
-            processorOptions: { targetSampleRate: 16000 },
-          });
-          processorRef.current = workletNode;
+        // 6. Load AudioWorklet — matches reference audio-recorder.ts pattern
+        //    The worklet sends { event: "chunk", data: { int16arrayBuffer } }
+        await audioContext.audioWorklet.addModule("/audio-processor.js");
+        const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
+        workletNodeRef.current = workletNode;
 
-          workletNode.port.onmessage = (e: MessageEvent<{ pcmData: ArrayBuffer }>) => {
-            const bytes = new Uint8Array(e.data.pcmData);
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const base64Chunk = btoa(binary);
-            session.sendAudio(base64Chunk);
-            audioChunkCountRef.current++;
-            if (audioChunkCountRef.current % 20 === 1) {
-              setError(`오디오 전송 중: ${audioChunkCountRef.current}청크, ${bytes.length}bytes`);
-            }
-          };
+        workletNode.port.onmessage = (e: MessageEvent) => {
+          const int16Buffer: ArrayBuffer = e.data?.data?.int16arrayBuffer;
+          if (!int16Buffer) return;
 
-          source.connect(workletNode);
-          // Do NOT connect workletNode to destination — avoids echo from mic
-        } else {
-          // Legacy fallback: ScriptProcessorNode for browsers without AudioWorklet
-          const processor = audioContext.createScriptProcessor(4096, 1, 1);
-          processorRef.current = processor;
+          // Convert to base64 and send — matches arrayBufferToBase64 in reference
+          const base64 = arrayBufferToBase64(int16Buffer);
+          session.sendAudio(base64);
 
-          processor.onaudioprocess = (e) => {
-            const inputData = e.inputBuffer.getChannelData(0);
-            const base64Chunk = float32ToBase64Pcm(inputData);
-            session.sendAudio(base64Chunk);
-          };
+          audioChunkCountRef.current++;
+          if (audioChunkCountRef.current % 20 === 1) {
+            setError(`오디오 전송 중: ${audioChunkCountRef.current}청크, ${int16Buffer.byteLength}bytes`);
+          }
+        };
 
-          source.connect(processor);
-          processor.connect(audioContext.destination);
-        }
+        // Connect: mic source → worklet (do NOT connect to destination to avoid echo)
+        source.connect(workletNode);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "연결에 실패했습니다.");
@@ -215,12 +297,13 @@ export default function SessionPage() {
 
     return () => {
       cancelled = true;
-      processorRef.current?.disconnect();
+      workletNodeRef.current?.disconnect();
       audioContextRef.current?.close();
+      audioStreamerRef.current?.stop();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       geminiSessionRef.current?.disconnect();
     };
-  }, [patientLang, playAudio]);
+  }, [patientLang]);
 
   const langLabel = patientLang === "th" ? "태국어" : "베트남어";
 
@@ -276,7 +359,7 @@ export default function SessionPage() {
         </button>
       </div>
 
-      {/* Error banner */}
+      {/* Error / debug banner */}
       {error && (
         <div className="flex-none bg-red-900/80 text-red-200 text-sm px-4 py-2 flex items-center justify-between">
           <span>{error}</span>
@@ -286,7 +369,7 @@ export default function SessionPage() {
         </div>
       )}
 
-      {/* Patient area (top 45%) */}
+      {/* Patient area (top half) */}
       <div className="flex-1 flex flex-col min-h-0 p-3">
         <PrompterDisplay
           text={patientPrompter.text}
@@ -299,7 +382,7 @@ export default function SessionPage() {
       {/* Divider */}
       <div className="flex-none h-px bg-gray-700 mx-4" />
 
-      {/* Staff area (bottom 45%) */}
+      {/* Staff area (bottom half) */}
       <div className="flex-1 flex flex-col min-h-0 p-3">
         <PrompterDisplay
           text={staffPrompter.text}

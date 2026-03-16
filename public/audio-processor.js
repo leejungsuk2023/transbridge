@@ -1,70 +1,64 @@
 /**
- * AudioWorklet processor: captures PCM audio from microphone,
- * downsamples to 16kHz Int16, and sends chunks to main thread.
+ * AudioWorklet processor for capturing microphone audio.
+ * Matches AudioProcessingWorklet from Google's reference implementation exactly.
+ * Ref: https://github.com/google-gemini/live-api-web-console/blob/main/src/lib/worklets/audio-processing.ts
+ *
+ * Buffers 2048 Int16 samples (~8x/sec at 16kHz) and posts them to the main thread.
+ * Message format: { event: "chunk", data: { int16arrayBuffer: ArrayBuffer } }
+ *
+ * IMPORTANT: AudioContext must be created at 16000 Hz so no downsampling is needed.
  */
-class AudioProcessor extends AudioWorkletProcessor {
-  constructor(options) {
+class AudioProcessingWorklet extends AudioWorkletProcessor {
+  // Send and clear buffer every 2048 samples.
+  // At 16kHz this fires about 8 times per second.
+  buffer = new Int16Array(2048);
+
+  // Current write index
+  bufferWriteIndex = 0;
+
+  constructor() {
     super();
-    // Target output sample rate (Gemini expects 16kHz)
-    this._targetSampleRate = (options && options.processorOptions && options.processorOptions.targetSampleRate) || 16000;
-    this._inputSampleRate = sampleRate; // AudioWorkletGlobalScope provides sampleRate
-    this._bufferSize = 2048;
-    this._buffer = new Float32Array(this._bufferSize);
-    this._bytesWritten = 0;
-    // Resampling state
-    this._resampleRatio = this._targetSampleRate / this._inputSampleRate;
-    this._resampleBuffer = [];
+    this.hasAudio = false;
   }
 
   /**
-   * Linear interpolation downsampler.
-   * Takes a Float32Array at native rate, returns Float32Array at target rate.
+   * @param inputs Float32Array[][] — [input#][channel#][sample#]
+   *               inputs[0][0] is the first channel of the first input
    */
-  _downsample(input) {
-    if (this._inputSampleRate === this._targetSampleRate) {
-      return input;
+  process(inputs) {
+    if (inputs[0].length) {
+      const channel0 = inputs[0][0];
+      this.processChunk(channel0);
     }
-    const outputLength = Math.round(input.length * this._resampleRatio);
-    const output = new Float32Array(outputLength);
-    for (let i = 0; i < outputLength; i++) {
-      const srcIndex = i / this._resampleRatio;
-      const srcIndexFloor = Math.floor(srcIndex);
-      const srcIndexCeil = Math.min(srcIndexFloor + 1, input.length - 1);
-      const fraction = srcIndex - srcIndexFloor;
-      output[i] = input[srcIndexFloor] * (1 - fraction) + input[srcIndexCeil] * fraction;
-    }
-    return output;
+    return true;
   }
 
-  process(inputs) {
-    const input = inputs[0];
-    if (!input || input.length === 0) return true;
+  sendAndClearBuffer() {
+    this.port.postMessage({
+      event: "chunk",
+      data: {
+        int16arrayBuffer: this.buffer.slice(0, this.bufferWriteIndex).buffer,
+      },
+    });
+    this.bufferWriteIndex = 0;
+  }
 
-    const channelData = input[0];
-    if (!channelData || channelData.length === 0) return true;
+  processChunk(float32Array) {
+    const l = float32Array.length;
 
-    // Downsample to target rate if needed
-    const samples = this._downsample(channelData);
-
-    for (let i = 0; i < samples.length; i++) {
-      this._buffer[this._bytesWritten++] = samples[i];
-
-      if (this._bytesWritten >= this._bufferSize) {
-        // Convert Float32 to Int16 PCM
-        const int16 = new Int16Array(this._bufferSize);
-        for (let j = 0; j < this._bufferSize; j++) {
-          const s = Math.max(-1, Math.min(1, this._buffer[j]));
-          int16[j] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
-        // Transfer buffer ownership to avoid copying
-        this.port.postMessage({ pcmData: int16.buffer }, [int16.buffer]);
-        this._buffer = new Float32Array(this._bufferSize);
-        this._bytesWritten = 0;
+    for (let i = 0; i < l; i++) {
+      // Convert float32 [-1, 1] to int16 [-32768, 32767]
+      const int16Value = float32Array[i] * 32768;
+      this.buffer[this.bufferWriteIndex++] = int16Value;
+      if (this.bufferWriteIndex >= this.buffer.length) {
+        this.sendAndClearBuffer();
       }
     }
 
-    return true;
+    if (this.bufferWriteIndex >= this.buffer.length) {
+      this.sendAndClearBuffer();
+    }
   }
 }
 
-registerProcessor('audio-processor', AudioProcessor);
+registerProcessor("audio-processor", AudioProcessingWorklet);
