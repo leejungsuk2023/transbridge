@@ -26,21 +26,32 @@ async function verifyToken(req: NextRequest): Promise<string | null> {
 
 export async function GET(req: NextRequest) {
   try {
-    const authUserId = await verifyToken(req);
-    if (!authUserId) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
     const supabase = getSupabaseAdmin();
 
-    // Get hospital id for this user
-    const { data: hospital, error: hospitalError } = await supabase
-      .from('hospitals')
-      .select('id')
-      .eq('auth_user_id', authUserId)
-      .single();
+    // Try to resolve hospital from auth token first
+    let hospitalId: string | null = null;
+    const authUserId = await verifyToken(req);
 
-    if (hospitalError || !hospital) {
+    if (authUserId) {
+      const { data: hospital } = await supabase
+        .from('hospitals')
+        .select('id')
+        .eq('auth_user_id', authUserId)
+        .single();
+      hospitalId = hospital?.id ?? null;
+    }
+
+    // Fallback: single-device setup — use first hospital record
+    if (!hospitalId) {
+      const { data: firstHospital } = await supabase
+        .from('hospitals')
+        .select('id')
+        .limit(1)
+        .single();
+      hospitalId = firstHospital?.id ?? null;
+    }
+
+    if (!hospitalId) {
       return NextResponse.json({ success: false, error: 'Hospital not found' }, { status: 404 });
     }
 
@@ -52,13 +63,13 @@ export async function GET(req: NextRequest) {
     const { count: total } = await supabase
       .from('sessions')
       .select('id', { count: 'exact', head: true })
-      .eq('hospital_id', hospital.id);
+      .eq('hospital_id', hospitalId);
 
     // Fetch paginated sessions ordered by started_at descending
     const { data: rows, error: listError } = await supabase
       .from('sessions')
       .select('id, hospital_id, patient_lang, status, started_at, ended_at, duration_sec')
-      .eq('hospital_id', hospital.id)
+      .eq('hospital_id', hospitalId)
       .order('started_at', { ascending: false })
       .range(offset, offset + limit - 1);
 

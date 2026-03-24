@@ -1,17 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 import { PatientLang } from "@/types";
 
-const mockSessions = [
-  { id: "1", date: "2024-01-15", language: "태국어", duration: "12분 30초", status: "완료" },
-  { id: "2", date: "2024-01-15", language: "베트남어", duration: "8분 15초", status: "완료" },
-  { id: "3", date: "2024-01-14", language: "태국어", duration: "23분 45초", status: "완료" },
-  { id: "4", date: "2024-01-14", language: "태국어", duration: "5분 20초", status: "완료" },
-  { id: "5", date: "2024-01-13", language: "베트남어", duration: "15분 10초", status: "완료" },
-];
+/** Maps patient language codes to display flag and Korean name */
+const LANG_MAP: Record<string, { flag: string; name: string }> = {
+  th: { flag: "🇹🇭", name: "태국어" },
+  vi: { flag: "🇻🇳", name: "베트남어" },
+  en: { flag: "🇺🇸", name: "영어" },
+  id: { flag: "🇮🇩", name: "인도네시아어" },
+  es: { flag: "🇪🇸", name: "스페인어" },
+  mn: { flag: "🇲🇳", name: "몽골어" },
+  yue: { flag: "🇭🇰", name: "광동어" },
+  zh: { flag: "🇨🇳", name: "북경어" },
+  ja: { flag: "🇯🇵", name: "일본어" },
+  fr: { flag: "🇫🇷", name: "프랑스어" },
+  de: { flag: "🇩🇪", name: "독일어" },
+};
+
+/** Format seconds into "X분 Y초" string */
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m === 0) return `${s}초`;
+  if (s === 0) return `${m}분`;
+  return `${m}분 ${s}초`;
+}
+
+/** Format ISO date string into "YYYY-MM-DD" */
+function formatDate(dateVal: string | Date): string {
+  const d = typeof dateVal === "string" ? new Date(dateVal) : dateVal;
+  return d.toISOString().slice(0, 10);
+}
 
 const PATIENT_LANGS: { code: PatientLang; flag: string; native: string; korean: string }[] = [
   { code: "th", flag: "🇹🇭", native: "ภาษาไทย", korean: "태국어" },
@@ -31,6 +53,69 @@ export default function DashboardPage() {
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<PatientLang | null>(null);
   const [starting, setStarting] = useState(false);
+
+  // Real session data from Supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [stats, setStats] = useState({
+    total: 0,
+    totalMinutes: 0,
+    byLang: {} as Record<string, number>,
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      const supabase = getSupabaseBrowserClient();
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      if (!authSession) {
+        setLoading(false);
+        return;
+      }
+      const token = authSession.access_token;
+
+      try {
+        const res = await fetch("/api/session/list?limit=50", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const result = await res.json();
+
+        if (result.success && result.data?.sessions) {
+          const sessionList = result.data.sessions;
+          setSessions(sessionList);
+
+          // Calculate stats for the current month
+          type SessionRow = { startedAt: string; durationSec?: number; patientLang?: string };
+          const now = new Date();
+          const thisMonth = (sessionList as SessionRow[]).filter((s) => {
+            const d = new Date(s.startedAt);
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+          });
+
+          const totalSeconds = thisMonth.reduce(
+            (sum: number, s: SessionRow) => sum + (s.durationSec || 0),
+            0
+          );
+          const byLang: Record<string, number> = {};
+          thisMonth.forEach((s: SessionRow) => {
+            const lang = s.patientLang || "unknown";
+            byLang[lang] = (byLang[lang] || 0) + 1;
+          });
+
+          setStats({
+            total: thisMonth.length,
+            totalMinutes: Math.floor(totalSeconds / 60),
+            byLang,
+          });
+        }
+      } catch (err) {
+        console.error("[Dashboard] Failed to fetch sessions:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, []);
 
   const handleNewSession = async () => {
     if (!selectedLang) return;
@@ -169,20 +254,64 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <p className="text-xs text-gray-500 mb-1">이번달 통역</p>
-            <p className="text-2xl font-bold text-gray-900">32<span className="text-sm font-normal text-gray-500 ml-1">건</span></p>
+            <p className="text-2xl font-bold text-gray-900">
+              {loading ? "—" : stats.total}
+              <span className="text-sm font-normal text-gray-500 ml-1">건</span>
+            </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <p className="text-xs text-gray-500 mb-1">총 사용시간</p>
-            <p className="text-xl font-bold text-gray-900">4<span className="text-sm font-normal text-gray-500">시간</span> 20<span className="text-sm font-normal text-gray-500">분</span></p>
+            <p className="text-xl font-bold text-gray-900">
+              {loading ? (
+                "—"
+              ) : stats.totalMinutes >= 60 ? (
+                <>
+                  {Math.floor(stats.totalMinutes / 60)}
+                  <span className="text-sm font-normal text-gray-500">시간</span>{" "}
+                  {stats.totalMinutes % 60}
+                  <span className="text-sm font-normal text-gray-500">분</span>
+                </>
+              ) : (
+                <>
+                  {stats.totalMinutes}
+                  <span className="text-sm font-normal text-gray-500">분</span>
+                </>
+              )}
+            </p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-100 p-4">
-            <p className="text-xs text-gray-500 mb-1">태국어</p>
-            <p className="text-2xl font-bold text-blue-600">20<span className="text-sm font-normal text-gray-500 ml-1">건</span></p>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-100 p-4">
-            <p className="text-xs text-gray-500 mb-1">베트남어</p>
-            <p className="text-2xl font-bold text-green-600">12<span className="text-sm font-normal text-gray-500 ml-1">건</span></p>
-          </div>
+          {/* Top 2 languages by session count this month */}
+          {loading ? (
+            <>
+              <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <p className="text-xs text-gray-500 mb-1">—</p>
+                <p className="text-2xl font-bold text-gray-400">—</p>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <p className="text-xs text-gray-500 mb-1">—</p>
+                <p className="text-2xl font-bold text-gray-400">—</p>
+              </div>
+            </>
+          ) : (
+            (() => {
+              const topLangs = Object.entries(stats.byLang)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 2);
+              // Pad to always render 2 cards
+              while (topLangs.length < 2) topLangs.push(["", 0]);
+              const colors = ["text-blue-600", "text-green-600"];
+              return topLangs.map(([code, count], i) => (
+                <div key={code || `empty-${i}`} className="bg-white rounded-xl border border-gray-100 p-4">
+                  <p className="text-xs text-gray-500 mb-1">
+                    {code ? (LANG_MAP[code]?.name ?? code) : "—"}
+                  </p>
+                  <p className={`text-2xl font-bold ${code ? colors[i] : "text-gray-400"}`}>
+                    {code ? count : "—"}
+                    {code && <span className="text-sm font-normal text-gray-500 ml-1">건</span>}
+                  </p>
+                </div>
+              ));
+            })()
+          )}
         </div>
 
         {/* Recent sessions table */}
@@ -191,38 +320,50 @@ export default function DashboardPage() {
             <h2 className="font-semibold text-gray-900">최근 통역 내역</h2>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50">
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">언어</th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {mockSessions.map((session) => (
-                  <tr key={session.id} className="hover:bg-gray-50 transition">
-                    <td className="px-5 py-3.5 text-gray-600">{session.date}</td>
-                    <td className="px-5 py-3.5">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        session.language === "태국어"
-                          ? "bg-blue-50 text-blue-700"
-                          : "bg-green-50 text-green-700"
-                      }`}>
-                        {session.language === "태국어" ? "🇹🇭" : "🇻🇳"} {session.language}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-600">{session.duration}</td>
-                    <td className="px-5 py-3.5">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                        {session.status}
-                      </span>
-                    </td>
+            {loading ? (
+              <div className="px-5 py-8 text-center text-sm text-gray-400">불러오는 중...</div>
+            ) : sessions.length === 0 ? (
+              <div className="px-5 py-8 text-center text-sm text-gray-400">아직 통역 이력이 없습니다</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">언어</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {sessions.map((session) => {
+                    const langInfo = LANG_MAP[session.patientLang] ?? { flag: "🌐", name: session.patientLang ?? "—" };
+                    const isActive = session.status === "active";
+                    return (
+                      <tr key={session.id} className="hover:bg-gray-50 transition">
+                        <td className="px-5 py-3.5 text-gray-600">{formatDate(session.startedAt)}</td>
+                        <td className="px-5 py-3.5">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                            {langInfo.flag} {langInfo.name}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-gray-600">
+                          {session.durationSec != null ? formatDuration(session.durationSec) : "—"}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            isActive
+                              ? "bg-green-50 text-green-700"
+                              : "bg-gray-100 text-gray-600"
+                          }`}>
+                            {isActive ? "진행중" : "완료"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
