@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 시작 중...
               </span>
             ) : (
-              `${selectedLang ? (selectedLang === "th" ? "🇹🇭 태국어" : "🇻🇳 베트남어") : ""} 통역 시작`
+              `${selectedLang ? `${PATIENT_LANGS.find(l => l.code === selectedLang)?.flag ?? ""} ${PATIENT_LANGS.find(l => l.code === selectedLang)?.korean ?? ""}` : ""} 통역 시작`
             )}
           </button>
         </div>
