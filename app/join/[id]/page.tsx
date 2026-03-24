@@ -32,6 +32,11 @@ const micText: Record<PatientLang, { instruction: string; start: string }> = {
     instruction: "Микрофон руу нэвтрэхийг зөвшөөрнө үү",
     start: "Эхлэх",
   },
+  yue: { instruction: "請允許使用麥克風", start: "開始" },
+  zh: { instruction: "请允许使用麦克风", start: "开始" },
+  ja: { instruction: "マイクへのアクセスを許可してください", start: "開始" },
+  fr: { instruction: "Veuillez autoriser l'accès au microphone", start: "Commencer" },
+  de: { instruction: "Bitte erlauben Sie den Zugriff auf das Mikrofon", start: "Starten" },
 };
 
 export default function JoinPage() {

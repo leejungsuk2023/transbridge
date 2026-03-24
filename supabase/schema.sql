@@ -15,7 +15,7 @@ create table if not exists hospitals (
 create table if not exists sessions (
   id uuid primary key default gen_random_uuid(),
   hospital_id uuid references hospitals(id) on delete cascade,
-  patient_lang text check (patient_lang in ('th', 'vi', 'en', 'id', 'es', 'mn')),
+  patient_lang text check (patient_lang in ('th', 'vi', 'en', 'id', 'es', 'mn', 'yue', 'zh', 'ja', 'fr', 'de')),
   status text not null default 'waiting' check (status in ('waiting', 'active', 'ended')),
   started_at timestamptz not null default now(),
   ended_at timestamptz,

@@ -93,7 +93,7 @@ export class GeminiLiveSession {
         config: liveConfig,
         callbacks: {
           onopen: () => {
-            this.callbacks.onError("setup 전송 완료, 응답 대기중...");
+            // Setup message sent, waiting for setupComplete
           },
           onmessage: (message: LiveServerMessage) => {
             this._handleMessage(message);

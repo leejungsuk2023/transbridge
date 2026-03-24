@@ -20,6 +20,11 @@ const PATIENT_LANGS: { code: PatientLang; flag: string; native: string; korean: 
   { code: "id", flag: "🇮🇩", native: "Bahasa Indonesia", korean: "인도네시아어" },
   { code: "es", flag: "🇪🇸", native: "Español", korean: "스페인어" },
   { code: "mn", flag: "🇲🇳", native: "Монгол хэл", korean: "몽골어" },
+  { code: "yue", flag: "🇭🇰", native: "廣東話", korean: "광동어" },
+  { code: "zh", flag: "🇨🇳", native: "普通话", korean: "북경어" },
+  { code: "ja", flag: "🇯🇵", native: "日本語", korean: "일본어" },
+  { code: "fr", flag: "🇫🇷", native: "Français", korean: "프랑스어" },
+  { code: "de", flag: "🇩🇪", native: "Deutsch", korean: "독일어" },
 ];
 
 export default function DashboardPage() {

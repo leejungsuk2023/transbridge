@@ -184,7 +184,7 @@ export default function SessionPage() {
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
-  const audioChunkCountRef = useRef(0);
+  // Debug chunk counter removed (was audioChunkCountRef)
 
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
@@ -274,10 +274,7 @@ export default function SessionPage() {
           const base64 = arrayBufferToBase64(int16Buffer);
           session.sendAudio(base64);
 
-          audioChunkCountRef.current++;
-          if (audioChunkCountRef.current % 20 === 1) {
-            setError(`오디오 전송 중: ${audioChunkCountRef.current}청크, ${int16Buffer.byteLength}bytes`);
-          }
+          // Audio chunk sent to Gemini
         };
 
         // Connect: mic source → worklet (do NOT connect to destination to avoid echo)
@@ -302,7 +299,12 @@ export default function SessionPage() {
     };
   }, [patientLang]);
 
-  const langLabel = patientLang === "th" ? "태국어" : "베트남어";
+  const langNames: Record<string, string> = {
+    th: "태국어", vi: "베트남어", en: "영어", id: "인도네시아어",
+    es: "스페인어", mn: "몽골어", yue: "광동어", zh: "북경어",
+    ja: "일본어", fr: "프랑스어", de: "독일어",
+  };
+  const langLabel = langNames[patientLang] ?? patientLang;
 
   const handleEndSession = async () => {
     if (!confirm("통역을 종료하시겠습니까?")) return;

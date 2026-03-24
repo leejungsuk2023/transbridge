@@ -1,7 +1,8 @@
 # MedTranslate — Product Requirements Document (PRD)
 
 > 작성일: 2026-03-03
-> 버전: v1.0
+> 최종 업데이트: 2026-03-24
+> 버전: v3.0
 
 ---
 
@@ -33,7 +34,7 @@
 
 ### 한 줄 설명
 
-병원 접수대에 비치된 안드로이드 기기 1대와 오픈핏 이어폰을 이용해, 병원 직원과 외국인 환자가 PTT(누르고 말하기) 방식으로 지연 없는 실시간 음성 통역(STS)과 프롬프터 자막을 주고받는 대면 통역 솔루션
+병원 접수대에 비치된 안드로이드 기기 1대와 오픈핏 이어폰을 이용해, 병원 직원과 외국인 환자가 마이크를 항상 켠 상태(Full-Duplex)로 Gemini Live API를 통해 실시간 양방향 음성 통역과 프롬프터 자막을 주고받는 대면 통역 솔루션
 
 ### 배경 및 동기
 
@@ -45,7 +46,8 @@
 - **단일 디바이스** 기반 대면 통역으로, 기기 관리·교육 복잡도 최소화
 - 통역사 파견 대비 10배 이상의 비용 절감
 - 환자 경험 향상 및 병원 서비스 품질 제고
-- Google Cloud STT/Translation/TTS를 활용한 정확도 높은 실시간 음성 통역(STS) 제공
+- Gemini Live API를 활용한 정확도 높은 실시간 음성 통역(STS) 제공 (STT+번역+TTS 단일 API 호출)
+- 피부과/미용 클리닉 특화 Glossary (보톡스, 필러, 레이저 등 27개 이상 시술 용어)
 
 ---
 
@@ -78,10 +80,10 @@
 
 | 항목 | 내용 |
 |------|------|
-| 역할 | 태국인 또는 베트남인 환자 |
-| 환경 | 병원 대기실 또는 접수대, 개인 스마트폰 |
-| 기술 수준 | 기본적인 스마트폰 사용 가능, QR 스캔 경험 있음 |
-| 주요 언어 | 태국어 (th) 또는 베트남어 (vi) |
+| 역할 | 외국인 환자 (태국어, 베트남어, 영어, 인도네시아어, 스페인어, 몽골어, 광동어, 북경어, 일본어, 프랑스어, 독일어 등) |
+| 환경 | 병원 접수대 (직원 디바이스 화면 공유) |
+| 기술 수준 | 별도 조작 불필요 — 직원이 세션을 시작하면 자동으로 연결됨 |
+| 주요 언어 | 11개 지원 언어 중 해당 언어 |
 
 **니즈 (Needs)**
 - 한국어를 몰라도 병원 직원과 자유롭게 대화하고 싶다.
@@ -99,30 +101,31 @@
 
 ## 3. 핵심 사용자 흐름 (Core User Flows)
 
-> v2.0부터는 QR 기반 2-Device 구조를 폐기하고, **단일 디바이스 대면형 STS 모델**을 사용한다.
+> v3.0: 단일 디바이스 + Gemini Live API Full-Duplex 모델. PTT 버튼 없음, 마이크 상시 켜짐.
 
 ### 흐름 A — 병원 실장(직원) 흐름
 
 ```
 1. 웹앱 접속 (medtranslate.kr) — 병원 접수대에 고정 비치된 안드로이드 기기
         |
-2. 이메일 + 비밀번호로 로그인 (Firebase Auth)
+2. 이메일 + 비밀번호로 로그인 (Supabase Auth)
         |
-3. 대시보드에서 환자 언어(태국어/베트남어) 선택 후 "새 통역 시작" 버튼 클릭
+3. 대시보드에서 환자 언어(11개 중 선택) 후 "통역 시작" 버튼 클릭
         |
-4. 화면이 상·하단으로 분할 렌더링 (상단: 환자용, 하단: 직원용)
+4. 화면이 상·하단으로 분할 렌더링 (상단: 환자 프롬프터, 하단: 직원 프롬프터)
         |
 5. 환자에게 소독된 오픈핏(Open-ear) 이어폰 제공 및 착용 안내
         |
-6. 직원이 하단의 '한국어 마이크' PTT 버튼을 누른 상태에서 발화
+6. 마이크가 항상 켜진 상태 — 직원이 한국어로 발화하면 Gemini Live가 자동 감지
         |
-7. 기기 내 STT → Glossary 교정 → 번역 → TTS 파이프라인 실행
+7. Gemini Live API: STT + 번역 + TTS를 단일 WebSocket 세션에서 실시간 처리
+           의료 용어 사전(Glossary)이 system_instruction에 주입되어 번역 정확도 향상
         |
-8. 환자 이어폰으로 태국어/베트남어 음성 출력
+8. 환자 이어폰으로 번역 음성 출력 (PCM 24kHz)
         |
-9. 화면 중앙 프롬프터 영역에 번역 문장 1줄을 크게 표시
+9. 하단 직원 프롬프터에 원문 한국어 + 번역 결과 표시 (Glossary 단어 하이라이팅)
         |
-10. 필요 시 통역 반복, 종료 시 "세션 종료" 버튼 클릭
+10. 필요 시 통역 반복, 종료 시 화면 상단 "종료" 버튼 클릭
 ```
 
 ---
@@ -132,69 +135,71 @@
 ```
 1. 병원 접수대에서 안내를 받고, 오픈핏 이어폰을 착용
         |
-2. 직원이 세션을 시작하면, 환자는 상단 화면에 자신의 언어(태국어/베트남어)를 확인
+2. 직원이 세션을 시작하면, 환자는 상단 화면에 자신의 언어 프롬프터를 확인
         |
-3. 직원 발화 후, 본인 언어의 번역 음성이 이어폰으로 재생
+3. 직원 발화 후, 본인 언어의 번역 음성이 이어폰으로 자동 재생
         |
-4. 동시에 화면 중앙 프롬프터에 번역 텍스트가 크게 표시되어 내용을 시각적으로 확인
+4. 동시에 상단 환자 프롬프터에 번역 텍스트가 크게 표시되어 내용을 시각적으로 확인
         |
-5. 본인이 말할 때는 상단의 '태국어/베트남어 마이크' PTT 버튼을 터치한 뒤 발화
+5. 본인이 말하면 마이크가 자동으로 감지 — 별도 버튼 조작 불필요
         |
-6. 기기에서 역방향 STT → Glossary 교정 → 번역 → TTS 실행
+6. Gemini Live가 역방향 번역(외국어 → 한국어) 실행
         |
-7. 직원 쪽 스피커/이어폰으로 한국어 음성 출력 + 화면에 한국어 문장 표시
+7. 직원 쪽 스피커/이어폰으로 한국어 음성 출력 + 하단 직원 프롬프터에 표시
         |
-8. 진료/접수 흐름이 종료되면 세션 종료 안내 후 이어폰 회수 및 소독
+8. 진료/접수 흐름이 종료되면 이어폰 회수 및 소독
 ```
 
 ---
 
-### 흐름 C — 단일 디바이스 번역 파이프라인 흐름
+### 흐름 C — Gemini Live API 번역 파이프라인
 
 ```
-[공용 디바이스(안드로이드 웹앱)]
+[단일 디바이스 (안드로이드 웹앱)]
         |
-1. 직원/환자 중 한 명이 PTT 버튼을 누름 (Half-Duplex, 한쪽만 활성)
+1. /api/gemini-token POST → ephemeral token (5분) 또는 API key 직접 발급
         |
-2. 마이크 캡처 (AudioWorklet 또는 MediaRecorder — PCM 오디오 스트림)
+2. @google/genai SDK live.connect() — Gemini Live WebSocket 연결 수립
         |
-3. Next.js API Route로 오디오 업로드 (HTTPS, 단일 디바이스 → 서버)
+3. AudioWorklet (audio-processor.js) — PCM 16kHz 마이크 상시 캡처
         |
-[서버 — Next.js API Routes + Google Cloud]
+4. 오디오 청크 → base64 → session.sendRealtimeInput() → Gemini Live 전송
         |
-4. Google Cloud STT v2 → 텍스트 변환 (단일 화자 인식)
+[Gemini Live API — 단일 WebSocket 세션]
         |
-5. 의료 용어 사전(Glossary) 적용 → 번역 정확도 향상
+5. 음성 자동 감지 + STT → 원문 텍스트 (inputTranscription)
         |
-6. Google Cloud Translation → 대상 언어로 번역
+6. system_instruction의 Glossary 용어집 적용 → 번역 (bidirectional: ko↔외국어)
         |
-7. Google Cloud TTS (WaveNet) → 번역 텍스트를 음성 합성
+7. TTS 합성 → PCM 24kHz 오디오 스트림 (audio/pcm;rate=24000)
         |
-[공용 디바이스]
+[단일 디바이스]
         |
-8. 합성된 오디오를 이어폰/스피커로 재생
+8. AudioStreamer: PCM 24kHz → Web Audio API 실시간 재생
         |
-9. 화면 중앙 프롬프터에 번역 문장 1줄만 크게 표시 (Glossary 단어 하이라이팅)
+9. inputTranscription → 원문 프롬프터 표시
+   outputTranscription → 번역 프롬프터 표시 (Glossary 하이라이팅)
         |
-10. 오디오·텍스트는 세션 종료 후 즉시 폐기 (저장하지 않음)
+10. 오디오·텍스트는 서버에 저장하지 않음 (개인정보 보호)
 ```
 
 ---
 
 ## 4. 기능 요구사항 (Functional Requirements)
 
-### FR-1: Half-Duplex(반이중) 오디오 제어
+### FR-1: Full-Duplex 상시 마이크 오디오 제어
 
 | 항목 | 내용 |
 |------|------|
-| 목적 | 하울링, 에코, 동시 발화로 인한 음성 품질 저하 방지 |
-| 방식 | 두 개의 PTT(누르고 말하기) 소프트웨어 버튼으로 단일 발화만 허용 |
+| 목적 | 자연스러운 대화 흐름 — PTT 버튼 없이 Gemini Live가 양방향 발화를 자동 감지 |
+| 방식 | AudioWorklet으로 마이크를 항상 켜고, PCM 16kHz 청크를 Gemini Live WebSocket에 실시간 전송 |
 
 **상세 요구사항**
-- 직원용 PTT 버튼(한국어)과 환자용 PTT 버튼(태국어/베트남어) 두 개를 제공한다.
-- 한쪽 PTT 버튼이 **눌려 있는 동안** 다른 쪽 마이크 입력은 시스템 레벨에서 비활성화한다.
-- TTS 음성이 재생 중일 때는 두 PTT 버튼 모두 비활성화하여, 재생 중 발화로 인한 하울링을 방지한다.
-- 버튼 상태(대기/녹음 중/재생 중)를 색상·아이콘으로 명확히 구분한다.
+- PTT 버튼 없음 — 마이크는 세션 시작부터 종료까지 항상 켜진 상태를 유지한다.
+- Gemini Live API의 bidirectional system_instruction으로 발화 언어를 자동 감지하여 번역 방향을 결정한다.
+- AudioWorklet (public/audio-processor.js) 이 PCM Int16 청크를 캡처하여 base64로 인코딩 후 sendRealtimeInput()으로 전송한다.
+- TTS 출력은 AudioStreamer(PCM 24kHz)를 통해 Web Audio API로 실시간 재생한다.
+- 연결 상태(connecting / connected / disconnected)를 상태바 색상과 텍스트로 명확히 구분한다.
 
 ---
 
@@ -208,7 +213,7 @@
 **상세 요구사항**
 - 이전 버전의 **대화형 말풍선 UI는 사용하지 않는다.**
 - 현재 완료된 **마지막 문장 1개만** 전체 화면에 가까운 크기로 표시한다.
-- `glossary/ko-th.json`, `glossary/ko-vi.json`에 정의된 의료 용어는:
+- `glossary/ko-th.json` 등 11개 언어 JSON 파일에 정의된 의료 용어 (피부과/미용 시술 용어 위주, 27개 이상)는:
   - 색상(예: 금색/강조색)과 굵기(Bold)를 사용해 시각적으로 돋보이게 렌더링한다.
   - 필요 시 하단에 원문/번역 용어를 작은 툴팁/설명으로 함께 표기할 수 있다.
 - 프롬프터 문장은 직원·환자 어느 쪽 발화이든 동일한 형식으로 표시하되,
@@ -216,31 +221,32 @@
 
 ---
 
-> 아래 FR-1~FR-8(기존 번호)은 **v1(QR 기반 2-Device) 설계를 참고용으로 유지**하며, 실제 구현에서는
-> QR 코드 생성/스캔, WebSocket 기반 다중 디바이스 동기화 기능은 v2.0에서 사용하지 않는다.
+> 아래 FR-1~FR-8(기존 번호)은 **v1(QR 기반 2-Device) 설계를 참고용으로 유지**한다.
+> v3에서는 Firebase/Firestore → Supabase, Google Cloud STT/Translation/TTS → Gemini Live API로 교체됨.
+> QR 코드 생성/스캔, WebSocket 기반 다중 디바이스 동기화, socket.io는 v3에서 사용하지 않는다.
 
-### FR-1: 병원 계정 관리
+### FR-1: 병원 계정 관리 [v1 참고용 — v3에서는 Supabase Auth로 교체됨]
 
 | 항목 | 내용 |
 |------|------|
-| 인증 수단 | 이메일 + 비밀번호 (Firebase Authentication) |
-| 계정 생성 | 관리자가 Firebase Console에서 직접 생성 (초기) |
-| 로그인 유지 | Firebase 세션 기반, 브라우저 재시작 후에도 유지 |
+| 인증 수단 | 이메일 + 비밀번호 (Supabase Auth) |
+| 계정 생성 | Supabase 대시보드 Authentication에서 직접 생성 |
+| 로그인 유지 | Supabase 세션 기반, 브라우저 재시작 후에도 유지 |
 | 로그아웃 | 대시보드에서 로그아웃 버튼 제공 |
 
 **상세 요구사항**
 - 로그인 실패 시 명확한 에러 메시지 표시
 - 비인가 접근 시 로그인 페이지로 자동 리디렉션
-- Firebase Auth의 ID 토큰으로 API Route 인증 처리
+- Supabase Auth JWT 토큰으로 API Route 인증 처리
 
 ---
 
 ### FR-2: 세션 관리
 
 **세션 생성**
-- 병원 실장이 "새 통역 시작" 버튼 클릭 시 세션 자동 생성
-- 세션 ID는 UUID v4로 생성
-- Firestore `sessions` 컬렉션에 세션 문서 저장
+- 병원 실장이 언어 선택 후 "통역 시작" 버튼 클릭 시 세션 자동 생성
+- 세션 ID는 UUID v4로 생성 (Supabase gen_random_uuid())
+- Supabase `sessions` 테이블에 저장
 - 세션 상태: `waiting` → `active` → `ended`
 
 **QR 코드 생성**
@@ -253,7 +259,7 @@
 - `waiting`: 환자 접속 대기 중
 - `active`: 양쪽 연결 완료, 통역 진행 중
 - `ended`: 세션 종료 (실장이 종료 버튼 클릭 또는 타임아웃)
-- Firestore 실시간 리스너로 상태 변화 감지
+- Supabase sessions 테이블 폴링 또는 Realtime으로 상태 변화 감지
 
 ---
 
@@ -352,11 +358,11 @@
 
 ### FR-8: 의료 용어 사전 (Glossary)
 
-- Firestore `glossary` 컬렉션에 저장
-- 한국어 기준 키로 태국어/베트남어 번역 제공
-- Google Cloud Translation API의 Custom Glossary 기능에 연동
-- 카테고리별 분류: 접수, 진료, 검사, 처치, 약품, 증상, 보험 등
-- 초기 150개 이상의 의료 용어 제공 (아래 §13 참고)
+- DB 미사용 — `glossary/ko-{lang}.json` 로컬 파일로 관리 (11개 언어)
+- 한국어 기준 키로 각 언어 번역 제공
+- buildSystemPrompt()가 Gemini Live system_instruction에 자동 주입하여 번역 정확도 향상
+- 카테고리별 분류: 안내, 시술, 증상, 약품, 보험 등 (피부과/미용 클리닉 특화)
+- 현재 27개 이상의 용어 제공 (ko-th 기준, §13 참고)
 
 ---
 
@@ -376,30 +382,29 @@
 
 ### 보안 (Security)
 
-- 음성 데이터는 Firestore에 저장하지 않음 — 실시간 처리 후 즉시 삭제 (개인정보 보호법 준수)
+- 음성 데이터는 DB에 저장하지 않음 — 실시간 처리 후 즉시 폐기 (개인정보 보호법 준수)
 - 모든 통신은 HTTPS / WSS (WebSocket Secure) 사용
-- Firebase Auth ID 토큰으로 API Route 접근 인증
+- Supabase Auth JWT로 API Route 접근 인증 (서버 사이드: service_role key)
 - 세션 URL은 추측 불가능한 UUID v4 형태
-- Firestore Security Rules로 데이터 접근 제어
+- Supabase RLS(Row Level Security)로 데이터 접근 제어
 - 환경 변수에 API 키 저장, 코드에 하드코딩 금지
 
 ---
 
 ### 확장성 (Scalability)
 
-- Google Cloud Run: 요청량에 따른 자동 스케일 업/다운
-- Firestore: 서버리스 NoSQL로 자동 확장
-- 서울 리전 (asia-northeast3) 배포로 국내 사용자 지연시간 최소화
-- WebSocket 서버는 Cloud Run 단일 인스턴스 내 socket.io로 처리 (초기)
-- 규모 확장 시 Redis Adapter 추가로 다중 인스턴스 지원 가능
+- Vercel Serverless: 요청량에 따른 자동 스케일 업/다운
+- Supabase PostgreSQL: 관리형 DB, 자동 백업
+- 서울 리전 (icn1) 배포로 국내 사용자 지연시간 최소화
+- Gemini Live API는 클라이언트가 직접 WebSocket 연결 — 서버 통과 불필요
 
 ---
 
 ### 가용성 (Availability)
 
 - 서비스 목표 가용성: 99.5% 이상
-- Cloud Run의 자동 재시작 및 헬스체크 활용
-- Firestore 99.999% SLA 활용
+- Vercel의 자동 재배포 및 에러 모니터링 활용
+- Supabase 99.9% SLA 활용
 
 ---
 
@@ -426,17 +431,22 @@
 
 ### v1(2-Device) → v2(1-Device STS) 아키텍처 변경
 
-- **이전(v1)**:  
-  - 구조: 직원 디바이스 ↔ WebSocket 서버(socket.io) ↔ 환자 디바이스  
+- **이전(v1)**:
+  - 구조: 직원 디바이스 ↔ WebSocket 서버(socket.io) ↔ 환자 디바이스
   - 역할: 각자의 브라우저에서 마이크를 켜고, WebSocket으로 오디오 스트림을 서버에 전송한 뒤, 상대 디바이스로 중계
   - 요구사항: QR 세션 생성, 세션 Room 관리, 다중 브라우저 상태 동기화
 
-- **현재(v2)**:  
-  - 구조: **단일 디바이스(안드로이드 웹앱)** → Next.js API Routes → Google Cloud(STT/Translation/TTS)  
-  - 역할: 한 기기에서 직원·환자 양쪽 발화를 번갈아 PTT로 입력하고, 번역 결과를 이어폰/프롬프터로 출력
-  - 효과: QR/세션 동기화·다중 디바이스 연결 복잡도가 사라지고, 단일 브라우저의 `AudioContext` 및 `MediaRecorder/AudioWorklet`이 오디오 I/O를 전담
+- **이전(v2)**:
+  - 구조: **단일 디바이스** → Next.js API Routes → Google Cloud(STT → Translation → TTS) 3단계 파이프라인
+  - 방식: Half-Duplex PTT 버튼 2개로 발화 제어
+  - 인증: Firebase Auth
 
-> socket.io WebSocket 서버는 향후 다중 디바이스 모드(v1 스타일)를 다시 지원할 필요가 있을 때를 대비해 보조 옵션으로 유지할 수 있으나, v2 기본 시나리오에서는 사용하지 않는다.
+- **현재(v3)**:
+  - 구조: **단일 디바이스** → @google/genai SDK → Gemini Live API WebSocket (Full-Duplex)
+  - 역할: 마이크를 항상 켠 상태에서 Gemini Live가 STT + 번역 + TTS를 단일 WebSocket 세션에서 처리
+  - 인증: Supabase Auth
+  - 배포: Vercel (서울 icn1), Supabase PostgreSQL
+  - 효과: 3단계 파이프라인이 1개 API 호출로 통합, PTT 조작 불필요, 11개 언어 지원
 
 ---
 
@@ -444,17 +454,16 @@
 
 | 영역 | 기술 | 버전/비고 |
 |------|------|-----------|
-| 프론트엔드 | Next.js (App Router) | 14.x |
-| 백엔드 | Next.js API Routes | 14.x |
-| 실시간 통신 | (v1) socket.io / (v2) HTTPS API 기반 단일 디바이스 STS | 4.x / Next.js API Routes |
-| 서버 인프라 | Google Cloud Run | 서울 리전 (asia-northeast3) |
-| 데이터베이스 | Firestore (Firebase) | NoSQL |
-| 인증 | Firebase Authentication | 이메일/비밀번호 |
-| STT | Google Cloud Speech-to-Text v2 | 스트리밍 |
-| 번역 | Google Cloud Translation API | v3 (AutoML Glossary) |
-| TTS | Google Cloud Text-to-Speech | WaveNet |
-| CI/CD | Cloud Build + Cloud Run | 자동 배포 |
-| 도메인 | medtranslate.kr | Cloud Run 연결 |
+| 프론트엔드 | Next.js (App Router) | 14.2.35 |
+| 백엔드 | Next.js API Routes | 14.2.35 |
+| 실시간 통역 | @google/genai SDK — Gemini Live API WebSocket | ^1.45.0 |
+| 번역 모델 | gemini-2.5-flash-native-audio-preview-12-2025 | STT + 번역 + TTS 통합 |
+| 서버 인프라 | Vercel | 서울 리전 (icn1) |
+| 데이터베이스 | Supabase PostgreSQL | @supabase/supabase-js ^2.99.1 |
+| 인증 | Supabase Auth | 이메일/비밀번호 |
+| 상태 관리 | Zustand | ^5.0.11 |
+| CI/CD | Vercel Git 연동 | main 브랜치 자동 배포 |
+| 도메인 | medtranslate.kr | Vercel 연결 |
 
 ---
 
@@ -463,54 +472,61 @@
 | 라이브러리 | 용도 |
 |------------|------|
 | Tailwind CSS | UI 스타일링 |
-| qrcode.react | QR코드 생성 및 표시 |
-| html5-qrcode | 브라우저 카메라로 QR 스캔 |
-| socket.io-client | WebSocket 실시간 통신 클라이언트 |
-| Web Audio API + AudioWorklet | 마이크 오디오 실시간 캡처 및 처리 (단일 디바이스 PTT) |
+| @google/genai | Gemini Live API WebSocket 클라이언트 (GeminiLiveSession) |
+| @supabase/supabase-js | Supabase Auth + DB 클라이언트 |
+| Web Audio API + AudioWorklet | 마이크 PCM 16kHz 상시 캡처 (audio-processor.js) |
+| Web Audio API + AudioContext | PCM 24kHz TTS 실시간 재생 (AudioStreamer) |
 | Zustand | 전역 상태 관리 |
+| uuid | 세션 ID 생성 |
 
 ---
 
 ### 시스템 아키텍처 다이어그램
 
 ```
-+---------------------------------------------------+
-|        단일 디바이스 (안드로이드 웹앱)            |
-|  - 직원 화면(하단) / 환자 화면(상단) 분할        |
-|  - PTT 버튼 2개 (직원/환자)                       |
-|  - Web Audio API + AudioWorklet/MediaRecorder     |
-+-------------------------+-------------------------+
-                          |
-                          |  HTTPS (API Routes)
-                          v
-                 +------------------------+
-                 |   Google Cloud Run    |
-                 |  (Next.js API Routes) |
-                 |                        |
-                 |  +------------------+  |
-                 |  | Translation      |  |
-                 |  | Pipeline         |  |
-                 |  +--------+---------+  |
-                 +-----------+------------+
-                             |
-                +------------+-------------+
-                |            |             |
-          +-----+---+   +----+-----+  +----+----+
-          | Cloud  |   | Cloud  |   | Cloud  |
-          |  STT   |   |Translate|   |  TTS   |
-          +--------+   +---------+   +--------+
-                             |
-                   +---------+---------+
-                   |     Firestore     |
-                   | (hospitals,       |
-                   |  sessions,        |
-                   |  glossary)        |
-                   +---------+---------+
-                             |
-                     +-------+-------+
-                     |   Firebase    |
-                     |     Auth      |
-                     +---------------+
++------------------------------------------------------------+
+|           단일 디바이스 (안드로이드 웹앱)                 |
+|                                                            |
+|  [환자 프롬프터 — 상단]   [직원 프롬프터 — 하단]         |
+|  - GlossaryHighlight      - GlossaryHighlight              |
+|                                                            |
+|  AudioWorklet (audio-processor.js)                        |
+|  → PCM 16kHz 상시 캡처 → base64 → sendRealtimeInput()    |
+|                                                            |
+|  AudioStreamer → PCM 24kHz → Web Audio API 재생           |
++---------+---------------------+---------------------------+
+          |                     |
+          | POST /api/gemini-token  HTTPS (ephemeral token)
+          v                     |
+   +-------------+              |
+   | Vercel      |              |
+   | (Next.js    |              |
+   | API Routes) |              |
+   +------+------+              |
+          |                     |
+          | token/apiKey        | WSS WebSocket
+          v                     v
+   +------------------------------------------+
+   |         Gemini Live API                  |
+   |  gemini-2.5-flash-native-audio-preview   |
+   |                                          |
+   |  system_instruction: Glossary 용어집    |
+   |  STT → 번역 → TTS (단일 세션)           |
+   |  inputTranscription + outputTranscription|
+   |  audio/pcm;rate=24000 스트림             |
+   +------------------------------------------+
+          |
+   +------+------+
+   | Supabase    |
+   | PostgreSQL  |
+   | hospitals   |
+   | sessions    |
+   +------+------+
+          |
+   +------+------+
+   | Supabase    |
+   |    Auth     |
+   +-------------+
 ```
 
 ---
@@ -558,53 +574,69 @@ AudioWorklet
 
 ### 언어 코드 매핑 테이블
 
-| 언어 | STT 코드 | Translation 코드 | TTS 코드 | TTS 음성 |
-|------|----------|-----------------|---------|---------|
-| 한국어 | ko-KR | ko | ko-KR | ko-KR-Wavenet-A |
-| 태국어 | th-TH | th | th-TH | th-TH-Standard-A |
-| 베트남어 | vi-VN | vi | vi-VN | vi-VN-Wavenet-A |
+> v3.0에서는 Gemini Live API가 STT + 번역 + TTS를 모두 처리하므로 별도 언어 코드 매핑이 불필요.
+> Gemini system_instruction에 언어명을 자연어로 기술 (예: "Korean", "Thai").
+
+| 언어 코드 | 언어명 (system_instruction용) | Glossary 파일 |
+|-----------|-------------------------------|---------------|
+| ko | 한국어 (Korean) | — (기준 언어) |
+| th | Thai (태국어) | glossary/ko-th.json |
+| vi | Vietnamese (베트남어) | glossary/ko-vi.json |
+| en | English (영어) | glossary/ko-en.json |
+| id | Indonesian (인도네시아어) | glossary/ko-id.json |
+| es | Spanish (스페인어) | glossary/ko-es.json |
+| mn | Mongolian (몽골어) | glossary/ko-mn.json |
+| yue | Cantonese (광동어) | glossary/ko-yue.json |
+| zh | Mandarin Chinese (북경어) | glossary/ko-zh.json |
+| ja | Japanese (일본어) | glossary/ko-ja.json |
+| fr | French (프랑스어) | glossary/ko-fr.json |
+| de | German (독일어) | glossary/ko-de.json |
 
 ---
 
 ## 7. 데이터 모델 (Data Model)
 
-### Firestore 컬렉션: `hospitals`
+> v3.0: Firebase/Firestore 제거, Supabase PostgreSQL 사용.
 
-| 필드명 | 타입 | 설명 |
+### Supabase 테이블: `hospitals`
+
+| 컬럼명 | 타입 | 설명 |
 |--------|------|------|
-| id | string | Firebase Auth UID (문서 ID) |
-| name | string | 병원명 |
-| email | string | 로그인 이메일 |
-| plan | string | 플랜 구분 (`free` / `basic` / `pro`) |
-| createdAt | Timestamp | 계정 생성 일시 |
+| id | uuid (PK) | gen_random_uuid() |
+| auth_user_id | uuid | auth.users(id) FK, Supabase Auth UID |
+| name | text | 병원명 |
+| email | text (UNIQUE) | 로그인 이메일 |
+| plan | text | 플랜 구분 (`free` / `basic` / `premium`) |
+| created_at | timestamptz | 계정 생성 일시 |
 
 ---
 
-### Firestore 컬렉션: `sessions`
+### Supabase 테이블: `sessions`
 
-| 필드명 | 타입 | 설명 |
+| 컬럼명 | 타입 | 설명 |
 |--------|------|------|
-| id | string | UUID v4 (문서 ID) |
-| hospitalId | string | hospitals 컬렉션 참조 ID |
-| patientLang | string | 환자 언어 코드 (`th` / `vi`) |
-| status | string | 세션 상태 (`waiting` / `active` / `ended`) |
-| startedAt | Timestamp | 세션 시작 일시 |
-| endedAt | Timestamp | 세션 종료 일시 (종료 시 업데이트) |
-| durationSec | number | 통역 총 시간 (초, 종료 시 계산) |
+| id | uuid (PK) | gen_random_uuid() |
+| hospital_id | uuid | hospitals(id) FK |
+| patient_lang | text | 환자 언어 코드 (`th`/`vi`/`en`/`id`/`es`/`mn`/`yue`/`zh`/`ja`/`fr`/`de`) |
+| status | text | 세션 상태 (`waiting` / `active` / `ended`) |
+| started_at | timestamptz | 세션 시작 일시 (default: now()) |
+| ended_at | timestamptz | 세션 종료 일시 (종료 시 업데이트) |
+| duration_sec | integer | 통역 총 시간 (초, 종료 시 자동 계산) |
 
-> 음성 데이터 및 대화 내용은 Firestore에 저장하지 않음 (개인정보 보호)
+> RLS 활성화 — 서버 사이드 API는 SUPABASE_SERVICE_ROLE_KEY로 RLS 우회
+> 음성 데이터 및 대화 내용은 DB에 저장하지 않음 (개인정보 보호)
 
 ---
 
-### Firestore 컬렉션: `glossary`
+### Glossary 데이터 (JSON 파일, DB 미사용)
+
+Glossary는 DB가 아닌 로컬 JSON 파일로 관리됩니다.
 
 | 필드명 | 타입 | 설명 |
 |--------|------|------|
-| id | string | 자동 생성 문서 ID |
 | ko | string | 한국어 용어 |
-| th | string | 태국어 번역 |
-| vi | string | 베트남어 번역 |
-| category | string | 카테고리 (접수 / 진료 / 검사 / 처치 / 약품 / 증상 / 보험) |
+| th / vi / en / id / es / mn / yue / zh / ja / fr / de | string? | 각 언어 번역 (해당 파일에 존재하는 경우) |
+| category | string | 카테고리 (안내 / 시술 / 증상 / 약품 / 보험 등) |
 
 ---
 
@@ -626,7 +658,7 @@ AudioWorklet
 - 에러 메시지 표시 영역
 
 **동작**
-- Firebase Auth `signInWithEmailAndPassword()` 호출
+- Supabase Auth `signInWithPassword()` 호출
 - 로그인 성공 시 `/dashboard`로 리디렉션
 - 로그인 실패 시 에러 메시지 표시 ("이메일 또는 비밀번호가 올바르지 않습니다.")
 - 이미 로그인된 상태로 접근 시 `/dashboard`로 자동 리디렉션
@@ -642,48 +674,26 @@ AudioWorklet
 
 **구성 요소**
 - 상단 헤더: MedTranslate 로고, 병원명, 로그아웃 버튼
-- "새 통역 시작" 버튼 (대형, 파란색 CTA)
-- QR코드 표시 영역 (세션 생성 후 표시)
-- QR코드 인쇄 버튼
-- 사용량 통계 카드 (3개):
-  - 이번 달 통역 건수
-  - 이번 달 총 통역 시간
-  - 언어별 건수
-- 최근 세션 목록 (테이블 형태)
+- 언어 선택 그리드 (11개 언어, 국기 이모지 + 자국어 표기)
+- "통역 시작" 버튼 (선택된 언어 표시, 미선택 시 비활성)
+- 사용량 통계 카드 (4개): 이번달 통역 건수, 총 사용시간, 태국어 건수, 베트남어 건수 (현재 mock 데이터)
+- 최근 세션 목록 테이블 (현재 mock 데이터)
 
 **동작**
-- "새 통역 시작" 클릭 → `POST /api/session` 호출 → 세션 생성 → QR 코드 렌더링
-- QR 코드는 세션이 `active` 또는 `waiting` 상태일 때만 표시
-- 세션 종료 후 목록에 자동 추가
-- Firestore 실시간 리스너로 세션 목록 자동 업데이트
+- 언어 선택 후 "통역 시작" 클릭 → `POST /api/session { patientLang }` → 세션 생성 → `/session/[id]?lang={code}` 이동
+- QR 코드 기능 없음 (v3에서 제거됨)
+- Supabase Auth를 통해 Bearer 토큰을 세션 생성 API에 전달
 
 ---
 
-### 화면 3: 환자 입장 페이지
+### 화면 3: 환자 입장 페이지 (v1 잔존 — 현재 미사용)
 
 | 항목 | 내용 |
 |------|------|
 | 경로 | `/join/[id]` |
-| 접근 조건 | 없음 (누구나 접근 가능, 세션 ID만 필요) |
+| 상태 | v1 잔존 코드. v3에서는 단일 디바이스 Full-Duplex 방식이므로 환자 입장 페이지 불필요 |
 
-**구성 요소**
-
-*Step 1 — 언어 선택*
-- "언어를 선택하세요 / กรุณาเลือกภาษา / Vui lòng chọn ngôn ngữ" 안내 문구
-- [ภาษาไทย (태국어)] 버튼 — 크게, 태국 국기 아이콘
-- [Tiếng Việt (베트남어)] 버튼 — 크게, 베트남 국기 아이콘
-
-*Step 2 — 마이크 허용 안내*
-- 마이크 아이콘 + 안내 문구 (자국어로 표시)
-  - 태국어: "กรุณาอนุญาตการเข้าถึงไมโครโฟน"
-  - 베트남어: "Vui lòng cho phép truy cập micrô"
-- "연결 시작 / เริ่มต้น / Bắt đầu" 버튼
-
-**동작**
-- 세션 ID의 유효성 Firestore에서 검증 (없거나 `ended` 상태면 에러 표시)
-- 언어 선택 후 Firestore 세션 문서의 `patientLang` 업데이트
-- 마이크 권한 요청 (`navigator.mediaDevices.getUserMedia`)
-- 권한 허용 시 `/session/[id]?role=patient` 로 이동
+> v3에서는 직원이 대시보드에서 언어를 선택하고 세션을 시작하면, 같은 디바이스에서 직원과 환자가 함께 사용한다.
 
 ---
 
@@ -691,35 +701,38 @@ AudioWorklet
 
 | 항목 | 내용 |
 |------|------|
-| 경로 | `/session/[id]` |
-| 접근 조건 | 세션 ID 유효, 역할(role) 파라미터 있음 |
+| 경로 | `/session/[id]?lang={patientLangCode}` |
+| 접근 조건 | 세션 ID 유효, lang 파라미터 있음 |
 
 **구성 요소**
 - 상단 상태 바:
-  - 연결 상태 인디케이터 (초록: 연결됨 / 빨강: 끊김)
-  - 세션 경과 시간 타이머
-  - 언어 표시 (예: 한국어 ↔ 태국어)
-- 말풍선 대화 영역 (스크롤 가능)
-  - 내 발화: 오른쪽 정렬 말풍선 (원문)
-  - 상대방 발화: 왼쪽 정렬 말풍선 (원문 + 번역)
-- 파형 애니메이션 영역
-  - 발화 중: 실시간 파형
-  - 번역 음성 재생 중: 재생 파형
-- 하단 컨트롤:
-  - 마이크 버튼 (누르고 있는 동안 발화 / Push-to-Talk)
-  - 세션 종료 버튼 (실장 역할만 표시)
+  - 연결 상태 인디케이터 (초록 pulse: 연결됨 / 노랑: 연결 중 / 빨강: 끊김)
+  - 언어 표시 (예: 태국어 ↔ 한국어)
+  - "종료" 버튼 (우측)
+- 환자 프롬프터 영역 (상단 절반, 파란/인디고 배경):
+  - PrompterDisplay — 환자 발화 원문 + 번역 결과 (Glossary 하이라이팅)
+  - 화자 라벨 "환자 발화 → 한국어"
+- 구분선
+- 직원 프롬프터 영역 (하단 절반, 파란/인디고 배경):
+  - PrompterDisplay — 직원 발화 원문 + 번역 결과 (Glossary 하이라이팅)
+  - 화자 라벨 "직원 발화 → {외국어}"
+- 하단 상태 바:
+  - 연결 상태 + "듣는 중..." 텍스트
+  - 세션 타이머 (MM:SS)
 
 **동작**
-- 페이지 진입 시 socket.io 연결 수립 및 세션 Room 참여
-- 마이크 버튼 누름 → AudioWorklet 시작 → 서버로 오디오 스트리밍
-- 버튼 뗌 → 스트리밍 중단 → STT 최종 결과 수신 대기
-- `translation` 이벤트 수신 → 말풍선 렌더링 → 음성 자동 재생
+- 페이지 로드 시 POST /api/gemini-token → GeminiLiveSession.connect()
+- AudioWorklet 로드 (public/audio-processor.js) → 마이크 상시 캡처 시작
+- PCM 16kHz 청크 → base64 → session.sendAudio() → Gemini Live 실시간 전송
+- inputTranscription 수신 → 언어 감지(한글) → 해당 프롬프터 업데이트
+- outputTranscription 수신 → 반대쪽 프롬프터 업데이트
+- audio/pcm 수신 → AudioStreamer.addPCM16() → 즉시 재생
+- "종료" 클릭 → confirm() → PUT /api/session {id, status:'ended'} → /dashboard
 
 **UX 포인트**
-- 말풍선 새 메시지 수신 시 자동 하단 스크롤
-- "상대방이 말하는 중..." 인디케이터 (발화 감지 시)
-- 번역 음성 재생 중에는 마이크 버튼 비활성화 (에코 방지)
-- 네트워크 끊김 시 "재연결 중..." 오버레이 표시
+- PTT 버튼 없음 — 마이크는 항상 켜진 상태
+- 반응형 폰트 크기 (텍스트 길이에 따라 자동 조정)
+- 빈 프롬프터: "한국어로 말하세요" / "{언어}로 말하세요" 플레이스홀더
 
 ---
 
@@ -728,64 +741,76 @@ AudioWorklet
 ```
 medtranslate/
 ├── app/                              # Next.js App Router 루트
-│   ├── page.tsx                      # 로그인 페이지 (/)
+│   ├── page.tsx                      # 로그인 페이지 (/) — Supabase Auth
 │   ├── dashboard/
-│   │   └── page.tsx                  # 대시보드 (/dashboard)
+│   │   └── page.tsx                  # 대시보드 (/dashboard) — 11개 언어 선택
 │   ├── session/
 │   │   └── [id]/
-│   │       └── page.tsx              # 통역 세션 UI (/session/[id])
+│   │       └── page.tsx              # 통역 세션 (/session/[id]?lang=xx) — Full-Duplex
 │   ├── join/
 │   │   └── [id]/
-│   │       └── page.tsx              # 환자 입장 (/join/[id])
+│   │       └── page.tsx              # [v1 잔존] 환자 입장 페이지 — 미사용
 │   └── api/
+│       ├── gemini-token/
+│       │   └── route.ts              # Gemini ephemeral token 발급
 │       ├── session/
-│       │   └── route.ts              # 세션 생성/조회/종료 API
+│       │   ├── route.ts              # 세션 CRUD (POST/GET/PATCH/PUT)
+│       │   └── list/
+│       │       └── route.ts          # 세션 목록 조회
 │       ├── translate/
-│       │   └── route.ts              # 번역 테스트 API (개발용)
+│       │   └── route.ts              # 서버사이드 번역 (PTT 모드 보조용)
 │       └── auth/
-│           └── route.ts              # 인증 관련 API
+│           └── route.ts              # 인증 유틸
 │
-├── components/                       # 재사용 가능한 React 컴포넌트
-│   ├── QRCode.tsx                    # QR코드 생성 컴포넌트 (qrcode.react)
-│   ├── QRScanner.tsx                 # QR 스캔 컴포넌트 (html5-qrcode)
-│   ├── AudioWorklet.tsx              # 마이크 오디오 캡처 컴포넌트
-│   ├── Transcript.tsx                # 말풍선 대화 목록 컴포넌트
-│   ├── WaveformAnimation.tsx         # 파형 애니메이션 컴포넌트
-│   ├── LanguageSelector.tsx          # 언어 선택 UI 컴포넌트
-│   └── ConnectionStatus.tsx          # 연결 상태 표시 컴포넌트
+├── components/                       # React 컴포넌트
+│   ├── PrompterDisplay.tsx           # 프롬프터 UI (반응형 폰트, 화자 라벨)
+│   ├── GlossaryHighlight.tsx         # Glossary 용어 하이라이팅
+│   ├── HalfDuplexPTT.tsx             # [v1 잔존] PTT 버튼 — 미사용
+│   ├── AudioRecorder.tsx             # [v1 잔존] 오디오 레코더 — 미사용
+│   ├── AudioPlayer.tsx               # [v1 잔존] 오디오 플레이어 — 미사용
+│   ├── TranscriptDisplay.tsx         # [v1 잔존] 말풍선 UI — 미사용
+│   ├── ConnectionStatus.tsx          # [v1 잔존] 연결 상태 — 미사용
+│   └── LanguageSelector.tsx          # [v1 잔존] 언어 선택 — 미사용
 │
-├── lib/                              # 외부 서비스 연동 및 유틸리티
-│   ├── google-stt.ts                 # Google Cloud STT v2 클라이언트
-│   ├── google-translate.ts           # Google Cloud Translation 클라이언트
-│   ├── google-tts.ts                 # Google Cloud TTS 클라이언트
-│   ├── firebase.ts                   # Firebase 초기화 및 Firestore 헬퍼
-│   ├── socket.ts                     # socket.io 클라이언트 초기화
-│   └── glossary.ts                   # 의료 용어 사전 로딩 및 적용 유틸
+├── lib/                              # 라이브러리
+│   ├── gemini-client.ts              # GeminiLiveSession (클라이언트 사이드 WebSocket)
+│   ├── gemini-live.ts                # translateWithGeminiLive (서버 사이드 단발성 번역)
+│   ├── supabase.ts                   # Supabase 클라이언트 (브라우저/서버 분리)
+│   └── glossary.ts                   # Glossary 로드, buildSystemPrompt, findTerms
 │
-├── server/                           # 서버 사이드 로직
-│   ├── websocket.ts                  # socket.io 서버 설정 및 이벤트 핸들러
-│   └── translation-pipeline.ts       # STT → Translation → TTS 파이프라인
+├── store/                            # Zustand 상태 관리
+│   ├── sessionStore.ts               # 세션 상태
+│   └── transcriptStore.ts            # 트랜스크립트 상태 (현재 미사용)
 │
-├── store/                            # Zustand 전역 상태 관리
-│   ├── sessionStore.ts               # 세션 상태 (id, status, lang)
-│   └── transcriptStore.ts            # 대화 내용 상태 (말풍선 목록)
+├── glossary/                         # 의료 용어 사전 JSON (11개 언어)
+│   ├── ko-th.json                    # 한-태 (피부과/미용 시술 위주)
+│   ├── ko-vi.json                    # 한-베
+│   ├── ko-en.json                    # 한-영
+│   ├── ko-id.json                    # 한-인도네시아어
+│   ├── ko-es.json                    # 한-스페인어
+│   ├── ko-mn.json                    # 한-몽골어
+│   ├── ko-yue.json                   # 한-광동어
+│   ├── ko-zh.json                    # 한-북경어
+│   ├── ko-ja.json                    # 한-일본어
+│   ├── ko-fr.json                    # 한-프랑스어
+│   └── ko-de.json                    # 한-독일어
 │
-├── glossary/                         # 의료 용어 사전 JSON 데이터
-│   ├── ko-th.json                    # 한-태 의료 용어 사전
-│   └── ko-vi.json                    # 한-베 의료 용어 사전
+├── public/
+│   └── audio-processor.js            # AudioWorklet 프로세서 (PCM 16kHz 캡처)
 │
-├── public/                           # 정적 파일
-│   ├── icons/                        # 국기 아이콘, 마이크 아이콘 등
-│   └── logo.svg                      # MedTranslate 로고
+├── supabase/                         # Supabase DB 스키마 및 마이그레이션
+│   ├── schema.sql                    # 초기 스키마 (hospitals, sessions + RLS)
+│   └── migrations/
+│       ├── 20260316_add_languages.sql # en, id 언어 추가
+│       └── 20260324_add_all_languages.sql # 11개 언어 전체 추가
 │
-├── types/                            # TypeScript 타입 정의
-│   └── index.ts                      # 공통 타입 (Session, Transcript 등)
+├── types/
+│   └── index.ts                      # 공통 타입 정의
 │
-├── Dockerfile                        # Cloud Run 배포용 Docker 이미지
-├── .env.local                        # 환경 변수 (로컬 개발용, git 제외)
-├── .env.example                      # 환경 변수 예시 파일
-├── next.config.js                    # Next.js 설정 (WebSocket 서버 포함)
-├── tailwind.config.js                # Tailwind CSS 설정
+├── vercel.json                       # Vercel 배포 설정 (framework, regions: icn1)
+├── .env.example                      # 환경 변수 예시
+├── next.config.mjs                   # Next.js 설정
+├── tailwind.config.ts                # Tailwind CSS 설정
 ├── tsconfig.json                     # TypeScript 설정
 └── package.json                      # 의존성 목록
 ```
@@ -794,69 +819,41 @@ medtranslate/
 
 ## 10. 개발 로드맵 (Development Roadmap)
 
-### Phase 1 — 프로젝트 셋업 + 기본 UI (1주)
-
-| 항목 | 내용 |
-|------|------|
-| 목표 | 개발 환경 구축 및 기본 UI 골격 완성 |
-| 주요 작업 | Next.js 프로젝트 초기화, Tailwind 설정, Firebase 초기화, 로그인 화면, 대시보드 기본 레이아웃, Dockerfile 작성 |
-| 완료 기준 | `npm run dev` 실행 시 로그인 → 대시보드 이동 동작 확인 |
-| 예상 기간 | 5~7일 |
+### Phase 1 — v1 (2-Device WebSocket) [완료, 폐기]
+v1 구현 완료 후 v2 1-Device PTT 모델로 전환, 이후 v3 Full-Duplex로 재구현됨.
 
 ---
 
-### Phase 2 — Firebase 인증 + Firestore (3일)
-
-| 항목 | 내용 |
-|------|------|
-| 목표 | 인증 및 데이터베이스 연동 완성 |
-| 주요 작업 | Firebase Auth 로그인/로그아웃, Firestore Security Rules, 세션 생성 API (`POST /api/session`), 세션 목록 실시간 리스너 |
-| 완료 기준 | 로그인 후 세션 생성 시 Firestore에 문서 저장 및 대시보드 목록 표시 |
-| 예상 기간 | 2~3일 |
+### Phase 2 — v2 (1-Device Half-Duplex PTT) [완료, v3로 교체]
+Supabase 도입, PTT 버튼 2개, Google Cloud STT+Translation+TTS 파이프라인 구현.
 
 ---
 
-### Phase 3 — QR 코드 + 세션 연결 (3일)
+### Phase 3 — v3 (Gemini Live API Full-Duplex) [완료]
 
 | 항목 | 내용 |
 |------|------|
-| 목표 | QR 생성 및 환자 입장 흐름 완성 |
-| 주요 작업 | qrcode.react로 QR 생성, html5-qrcode로 QR 스캔, 언어 선택 UI, 마이크 권한 요청, socket.io 기본 연결 |
-| 완료 기준 | QR 스캔 후 환자가 세션에 참여하고 양쪽이 WebSocket으로 연결 |
-| 예상 기간 | 3일 |
+| 목표 | Gemini Live API 단일 통합으로 STT+번역+TTS 처리, PTT 제거 |
+| 주요 작업 | @google/genai SDK 도입, GeminiLiveSession 구현, AudioWorklet, AudioStreamer, 11개 언어 확장 |
+| 완료 기준 | 마이크 상시 켬 → 발화 감지 → 자동 번역 → TTS 재생 + 프롬프터 표시 |
 
 ---
 
-### Phase 4 — 번역 파이프라인 핵심 구현 (1~2주)
+### 남은 작업 (참고: work.md 우선순위 목록)
 
 | 항목 | 내용 |
 |------|------|
-| 목표 | 실시간 음성 통역 동작 완성 (전체 개발의 70%) |
-| 주요 작업 | AudioWorklet 마이크 캡처, Google STT v2 스트리밍 연동, Google Translation 연동, Google TTS 연동, Translation Pipeline 통합, Glossary 적용 |
-| 완료 기준 | 한국어 발화 → 태국어/베트남어 음성 출력, 역방향 통역 동작 |
-| 예상 기간 | 7~14일 |
+| 대시보드 실제 데이터 연동 | Supabase sessions 쿼리로 통계/목록 교체 |
+| 11개 언어 langLabel 완성 | 세션 페이지 + PrompterDisplay 언어명 전체 대응 |
+| 디버그 코드 제거 | audioChunkCountRef setError() 호출 정리 |
 
 ---
 
-### Phase 5 — UI 완성 + 통합 테스트 (1주)
+### Phase 3 ~ Phase 6 [완료 — v1/v2 레거시 계획, v3에서 대체됨]
 
-| 항목 | 내용 |
-|------|------|
-| 목표 | 사용자 경험 완성 및 버그 수정 |
-| 주요 작업 | 말풍선 UI 완성, 파형 애니메이션, 연결 상태 표시, 대시보드 통계 카드, 모바일 브라우저 호환성 테스트, iOS Safari 마이크 이슈 해결 |
-| 완료 기준 | 실제 환경에서 병원 직원 + 외국인 환자 시나리오 엔드투엔드 동작 |
-| 예상 기간 | 5~7일 |
-
----
-
-### Phase 6 — 배포 + 도메인 연결 (2~3일)
-
-| 항목 | 내용 |
-|------|------|
-| 목표 | 프로덕션 배포 및 운영 환경 구축 |
-| 주요 작업 | Cloud Build 파이프라인 설정, Cloud Run 배포, medtranslate.kr 도메인 연결, SSL 인증서 설정, 환경 변수 설정, 모니터링 알림 설정 |
-| 완료 기준 | `https://medtranslate.kr` 에서 전체 서비스 정상 동작 |
-| 예상 기간 | 2~3일 |
+> v3 전환으로 QR 코드, socket.io, Google Cloud STT/Translation/TTS, Cloud Run 배포 단계는 모두 완료 처리되었다.
+> 현재 시스템은 Gemini Live API + Supabase + Vercel 기반으로 운영 중이다.
+> 남은 작업은 위 "남은 작업" 섹션 및 `work.md` 참조.
 
 ---
 
@@ -867,76 +864,73 @@ medtranslate/
 | 세션 | 담당 영역 | 주요 파일 |
 |------|-----------|-----------|
 | 세션 A | 프론트엔드 | `app/`, `components/`, `store/` |
-| 세션 B | 백엔드 + DB | `app/api/`, `lib/firebase.ts`, `server/websocket.ts` |
-| 세션 C | 번역 파이프라인 | `lib/google-*.ts`, `server/translation-pipeline.ts` |
-| 세션 D | 배포 + 인프라 | `Dockerfile`, `.env`, Cloud Run 설정 |
+| 세션 B | 백엔드 + DB | `app/api/`, `lib/supabase.ts`, `supabase/` |
+| 세션 C | Gemini Live + Glossary | `lib/gemini-client.ts`, `lib/glossary.ts`, `glossary/` |
+| 세션 D | 배포 + 인프라 | `vercel.json`, `.env.local`, Supabase 마이그레이션 |
 
 ---
 
 ## 11. 환경 설정 (Environment Setup)
 
-### Google Cloud Console 설정
+### Supabase 설정
 
-- [ ] 새 프로젝트 생성 (예: `medtranslate-prod`)
-- [ ] Cloud Speech-to-Text API 활성화
-- [ ] Cloud Translation API 활성화
-- [ ] Cloud Text-to-Speech API 활성화
-- [ ] Cloud Run API 활성화
-- [ ] Cloud Build API 활성화
-- [ ] 서비스 계정 생성 및 JSON 키 발급
-  - 역할: Cloud Speech Client, Cloud Translation API User, Cloud Text-to-Speech API User
-- [ ] Cloud Run 서비스 배포 리전 설정 (asia-northeast3, 서울)
+- [ ] Supabase 프로젝트 생성 (https://supabase.com)
+- [ ] SQL Editor에서 `supabase/schema.sql` 실행 (hospitals, sessions 테이블 + RLS)
+- [ ] SQL Editor에서 마이그레이션 순서대로 실행:
+  - `supabase/migrations/20260316_add_languages.sql`
+  - `supabase/migrations/20260324_add_all_languages.sql`
+- [ ] Authentication → Email 로그인 활성화
+- [ ] 병원 계정 생성 (Authentication → Users → 사용자 추가)
+- [ ] hospitals 테이블에 병원 레코드 삽입 (auth_user_id 연결)
+- [ ] Project Settings → API → URL, anon key, service_role key 복사
 
 ---
 
-### Firebase Console 설정
+### Google AI Studio 설정
 
-- [ ] Firebase 프로젝트 생성 (Google Cloud 프로젝트와 연결)
-- [ ] Authentication 활성화 → 이메일/비밀번호 로그인 방법 활성화
-- [ ] Firestore Database 생성 (프로덕션 모드)
-- [ ] Firestore Security Rules 설정
-- [ ] 병원 계정 생성 (Authentication → 사용자 추가)
-- [ ] Firebase 웹 앱 추가 → SDK 설정 값 복사
+- [ ] https://aistudio.google.com 에서 API key 발급
+- [ ] Gemini API — gemini-2.5-flash-native-audio-preview 모델 접근 확인
+
+---
+
+### Vercel 배포 설정
+
+- [ ] Vercel 프로젝트 생성 및 Git 연결
+- [ ] Environment Variables 등록 (아래 목록 참조)
+- [ ] Region: icn1 (Seoul) — vercel.json에 설정됨
 
 ---
 
 ### 환경 변수 목록 (`.env.local`)
 
 ```bash
-# Firebase 클라이언트 SDK
-NEXT_PUBLIC_FIREBASE_API_KEY=
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
-NEXT_PUBLIC_FIREBASE_APP_ID=
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=          # 서버 사이드 전용, NEXT_PUBLIC_ 붙이지 않음
 
-# Google Cloud (서버 사이드)
-GOOGLE_CLOUD_PROJECT_ID=
-GOOGLE_CLOUD_CLIENT_EMAIL=
-GOOGLE_CLOUD_PRIVATE_KEY=
+# Gemini API (Google AI Studio)
+GEMINI_API_KEY=
 
 # 앱 설정
 NEXT_PUBLIC_APP_URL=https://medtranslate.kr
-NEXT_PUBLIC_WEBSOCKET_URL=wss://medtranslate.kr
-
-# 서버 설정
-PORT=3000
-NODE_ENV=production
 ```
 
 ---
 
 ## 12. 비용 분석 (Cost Analysis)
 
+> v3.0 기준 — Google Cloud STT/Translation/TTS 3개 API 비용이 Gemini Live API 단일 비용으로 통합됨.
+
 ### 초기 비용
 
 | 항목 | 비용 |
 |------|------|
-| Google Cloud 신규 가입 크레딧 | $300 (약 ₩400,000) 무료 제공 |
+| Google AI Studio 무료 티어 | 무료 (일정 한도 내) |
+| Supabase Free tier | 무료 (500MB DB, 50,000 Auth MAU) |
+| Vercel Hobby | 무료 (개인 프로젝트) |
 | 도메인 (medtranslate.kr) | 약 ₩20,000/년 |
-| 개발 초기 인프라 | Google Cloud 무료 크레딧으로 충당 가능 |
-| **초기 총비용** | **약 ₩20,000 ~ ₩50,000** |
+| **초기 총비용** | **약 ₩20,000/년** |
 
 ---
 
@@ -946,14 +940,12 @@ NODE_ENV=production
 
 | 서비스 | 사용량 추정 | 단가 | 월 비용 |
 |--------|------------|------|---------|
-| Google Cloud STT | 10곳 × 30회 × 10분 = 3,000분 | $0.016/분 | $48 (약 ₩64,000) |
-| Google Cloud Translation | 약 50,000 자 | $20/백만자 | $1 (약 ₩1,400) |
-| Google Cloud TTS | 약 100,000 자 | $16/백만자 | $1.6 (약 ₩2,200) |
-| Cloud Run | 상시 최소 인스턴스 1대 | $15~30/월 | ₩20,000~40,000 |
-| Firestore | 소량 읽기/쓰기 | 무료 티어 범위 내 | ₩0 |
-| **합계** | | | **약 ₩90,000~120,000** |
+| Gemini Live API (gemini-2.5-flash) | 3,000분 오디오 입출력 | 정확한 단가 Google AI 정책 참조 | 추정 중 |
+| Supabase (Pro tier, 필요 시) | DB 읽기/쓰기 소량 | $25/월 | ₩35,000 |
+| Vercel (Pro, 필요 시) | Serverless 실행 | $20/월 | ₩28,000 |
+| **합계 (Pro tier 기준)** | | | **약 ₩60,000~ + Gemini API** |
 
-> 실제 사용량에 따라 증감 가능. Google Cloud 프리 티어 적용 시 일부 무료.
+> Gemini Live API 가격은 Google AI Studio 요금제 참조. 단일 API 통합으로 v2(STT+Translation+TTS 3개 API) 대비 청구 단순화.
 
 ---
 
@@ -1004,7 +996,8 @@ NODE_ENV=production
 | 약품 | 항생제 | ยาปฏิชีวนะ | Kháng sinh |
 | 약품 | 식후 복용 | รับประทานหลังอาหาร | Uống sau bữa ăn |
 
-> 전체 데이터는 `glossary/ko-th.json`, `glossary/ko-vi.json` 파일에 JSON 형태로 관리. 150개 이상의 용어로 초기 구성 예정.
+> 전체 데이터는 `glossary/ko-th.json` 등 11개 언어 JSON 파일로 관리 (피부과/미용 시술 용어 위주, 27개 이상 구현 완료).
+> buildSystemPrompt()가 Gemini Live system_instruction에 자동 주입. DB 불필요.
 
 ---
 
@@ -1015,11 +1008,11 @@ NODE_ENV=production
 | 번역 정확도 | 95% 이상 | 의료 전문가 샘플 검수 |
 | 음성 인식 정확도 (WER) | 10% 이하 (Word Error Rate) | STT 결과 샘플 검수 |
 | 전체 응답 지연시간 | 2초 이내 | 발화 종료 → 음성 출력 시간 측정 |
-| WebSocket 연결 성공률 | 99% 이상 | 서버 로그 분석 |
-| 세션 완료율 | 80% 이상 (에러 없이 종료) | Firestore 세션 상태 분석 |
+| Gemini Live 연결 성공률 | 99% 이상 | Vercel 로그 분석 |
+| 세션 완료율 | 80% 이상 (에러 없이 종료) | Supabase sessions 상태 분석 |
 | 사용자 만족도 | 4.0 / 5.0 이상 | 사용 후 짧은 피드백 수집 |
-| 월간 활성 병원 수 | 런칭 3개월 내 10곳 | Firestore 세션 생성 병원 수 |
-| 통역 세션 수 | 월 300건 이상 (10곳 기준) | Firestore 세션 컬렉션 집계 |
+| 월간 활성 병원 수 | 런칭 3개월 내 10곳 | Supabase sessions 집계 |
+| 통역 세션 수 | 월 300건 이상 (10곳 기준) | Supabase sessions 테이블 집계 |
 
 ---
 
@@ -1029,12 +1022,12 @@ NODE_ENV=production
 
 | 리스크 | 영향도 | 대응 방안 |
 |--------|--------|-----------|
-| STT 의료 용어 인식 부정확 | 높음 | Glossary 적용, 사용자 피드백 기반 지속 개선 |
-| iOS Safari AudioWorklet 미지원 이슈 | 높음 | getUserMedia + ScriptProcessor 폴백 구현 |
-| 네트워크 불안정으로 WebSocket 끊김 | 중간 | socket.io 자동 재연결, 끊김 상태 UI 표시 |
-| Cloud Run 콜드 스타트 지연 | 중간 | 최소 인스턴스 1개 유지 설정 (`--min-instances=1`) |
-| Google Cloud API 할당량 초과 | 낮음 | 할당량 모니터링 알림 설정, 플랜 업그레이드 준비 |
-| 번역 지연 2초 초과 | 중간 | STT 스트리밍 최적화, 서버 리전 최적화 (서울) |
+| Gemini Live 의료 용어 인식 부정확 | 높음 | Glossary system_instruction 주입 + 지속 개선 |
+| iOS Safari AudioWorklet 미지원 이슈 | 높음 | getUserMedia + ScriptProcessor 폴백 구현 고려 |
+| Gemini Live WebSocket 연결 불안정 | 중간 | onclose 콜백에서 자동 재연결, disconnected 상태 UI 표시 |
+| Gemini API 할당량 / 응답 지연 | 중간 | thinkingBudget:0으로 지연 최소화, 할당량 모니터링 |
+| Vercel Serverless cold start | 낮음 | /api/gemini-token은 경량 — 영향 미미 |
+| 번역 지연 2초 초과 | 중간 | Gemini Live는 스트리밍 응답, 체감 지연 최소화 |
 
 ---
 

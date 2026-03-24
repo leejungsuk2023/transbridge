@@ -16,6 +16,11 @@ export interface GlossaryEntry {
   id?: string;
   es?: string;
   mn?: string;
+  yue?: string;
+  zh?: string;
+  ja?: string;
+  fr?: string;
+  de?: string;
   category: string;
   [key: string]: string | undefined;
 }
@@ -43,9 +48,9 @@ export function loadGlossary(langPair: string): GlossaryEntry[] {
  * Resolves the lang pair key ('ko-th' | 'ko-vi') from source/target language codes.
  * Returns null if neither language is Korean (unsupported pair).
  */
-type LangPair = 'ko-th' | 'ko-vi' | 'ko-en' | 'ko-id' | 'ko-es' | 'ko-mn';
+type LangPair = 'ko-th' | 'ko-vi' | 'ko-en' | 'ko-id' | 'ko-es' | 'ko-mn' | 'ko-yue' | 'ko-zh' | 'ko-ja' | 'ko-fr' | 'ko-de';
 
-const SUPPORTED_TARGETS = ['th', 'vi', 'en', 'id', 'es', 'mn'];
+const SUPPORTED_TARGETS = ['th', 'vi', 'en', 'id', 'es', 'mn', 'yue', 'zh', 'ja', 'fr', 'de'];
 
 function resolveLangPair(
   sourceLang: string,
@@ -75,6 +80,11 @@ export function buildSystemPrompt(
     id: 'Indonesian (인도네시아어)',
     es: 'Spanish (스페인어)',
     mn: 'Mongolian (몽골어)',
+    yue: 'Cantonese (광동어)',
+    zh: 'Mandarin Chinese (북경어)',
+    ja: 'Japanese (일본어)',
+    fr: 'French (프랑스어)',
+    de: 'German (독일어)',
   };
 
   const srcName = langNames[sourceLang];
