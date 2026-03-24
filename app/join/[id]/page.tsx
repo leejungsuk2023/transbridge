@@ -28,6 +28,10 @@ const micText: Record<PatientLang, { instruction: string; start: string }> = {
     instruction: "Por favor, permita el acceso al micrófono",
     start: "Comenzar",
   },
+  mn: {
+    instruction: "Микрофон руу нэвтрэхийг зөвшөөрнө үү",
+    start: "Эхлэх",
+  },
 };
 
 export default function JoinPage() {

@@ -19,6 +19,7 @@ const PATIENT_LANGS: { code: PatientLang; flag: string; native: string; korean: 
   { code: "en", flag: "🇺🇸", native: "English", korean: "영어" },
   { code: "id", flag: "🇮🇩", native: "Bahasa Indonesia", korean: "인도네시아어" },
   { code: "es", flag: "🇪🇸", native: "Español", korean: "스페인어" },
+  { code: "mn", flag: "🇲🇳", native: "Монгол хэл", korean: "몽골어" },
 ];
 
 export default function DashboardPage() {

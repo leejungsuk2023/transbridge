@@ -73,6 +73,7 @@ export function buildSystemPrompt(
     en: 'English (영어)',
     id: 'Indonesian (인도네시아어)',
     es: 'Spanish (스페인어)',
+    mn: 'Mongolian (몽골어)',
   };
 
   const srcName = langNames[sourceLang];
