@@ -16,6 +16,8 @@ const mockSessions = [
 const PATIENT_LANGS: { code: PatientLang; flag: string; native: string; korean: string }[] = [
   { code: "th", flag: "🇹🇭", native: "ภาษาไทย", korean: "태국어" },
   { code: "vi", flag: "🇻🇳", native: "Tiếng Việt", korean: "베트남어" },
+  { code: "en", flag: "🇺🇸", native: "English", korean: "영어" },
+  { code: "id", flag: "🇮🇩", native: "Bahasa Indonesia", korean: "인도네시아어" },
 ];
 
 export default function DashboardPage() {

@@ -39,8 +39,8 @@ export function loadGlossary(langPair: 'ko-th' | 'ko-vi'): GlossaryEntry[] {
  * Returns null if neither language is Korean (unsupported pair).
  */
 function resolveLangPair(
-  sourceLang: 'ko' | 'th' | 'vi',
-  targetLang: 'ko' | 'th' | 'vi'
+  sourceLang: string,
+  targetLang: string
 ): 'ko-th' | 'ko-vi' | null {
   if (
     (sourceLang === 'ko' && targetLang === 'th') ||
@@ -63,13 +63,15 @@ function resolveLangPair(
  * 2. Injects all glossary terms as required translation mappings.
  */
 export function buildSystemPrompt(
-  sourceLang: 'ko' | 'th' | 'vi',
-  targetLang: 'ko' | 'th' | 'vi'
+  sourceLang: string,
+  targetLang: string
 ): string {
   const langNames: Record<string, string> = {
     ko: '한국어 (Korean)',
     th: 'Thai (태국어)',
     vi: 'Vietnamese (베트남어)',
+    en: 'English (영어)',
+    id: 'Indonesian (인도네시아어)',
   };
 
   const srcName = langNames[sourceLang];
@@ -121,8 +123,8 @@ ${glossaryLines}`;
  */
 export function findGlossaryTermsInText(
   translatedText: string,
-  sourceLang: 'ko' | 'th' | 'vi',
-  targetLang: 'ko' | 'th' | 'vi'
+  sourceLang: string,
+  targetLang: string
 ): string[] {
   if (!translatedText.trim()) return [];
 

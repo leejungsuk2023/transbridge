@@ -16,6 +16,14 @@ const micText: Record<PatientLang, { instruction: string; start: string }> = {
     instruction: "Vui lòng cho phép sử dụng micrô",
     start: "Bắt đầu",
   },
+  en: {
+    instruction: "Please allow microphone access",
+    start: "Start",
+  },
+  id: {
+    instruction: "Silakan izinkan akses mikrofon",
+    start: "Mulai",
+  },
 };
 
 export default function JoinPage() {
