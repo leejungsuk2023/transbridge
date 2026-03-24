@@ -1,5 +1,5 @@
 export type SessionStatus = 'waiting' | 'active' | 'ended';
-export type PatientLang = 'th' | 'vi' | 'en' | 'id';
+export type PatientLang = 'th' | 'vi' | 'en' | 'id' | 'es';
 export type UserRole = 'staff' | 'patient';
 
 // v2 types

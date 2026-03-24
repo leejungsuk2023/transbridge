@@ -24,6 +24,10 @@ const micText: Record<PatientLang, { instruction: string; start: string }> = {
     instruction: "Silakan izinkan akses mikrofon",
     start: "Mulai",
   },
+  es: {
+    instruction: "Por favor, permita el acceso al micrófono",
+    start: "Comenzar",
+  },
 };
 
 export default function JoinPage() {

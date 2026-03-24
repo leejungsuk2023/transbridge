@@ -72,6 +72,7 @@ export function buildSystemPrompt(
     vi: 'Vietnamese (베트남어)',
     en: 'English (영어)',
     id: 'Indonesian (인도네시아어)',
+    es: 'Spanish (스페인어)',
   };
 
   const srcName = langNames[sourceLang];
