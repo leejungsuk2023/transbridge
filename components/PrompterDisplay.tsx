@@ -24,14 +24,16 @@ export default function PrompterDisplay({ text, glossaryTerms, speaker, lang }: 
   const fontSizeClass = getFontSizeClass(text);
 
   const speakerLabel = speaker === "staff" ? "직원 발화" : "환자 발화";
-  const langLabel =
-    lang === "th"
-      ? speaker === "staff"
-        ? "→ ภาษาไทย"
-        : "→ 한국어"
-      : speaker === "staff"
-      ? "→ Tiếng Việt"
-      : "→ 한국어";
+  const langNames: Record<string, string> = {
+    th: "ภาษาไทย",
+    vi: "Tiếng Việt",
+    en: "English",
+    id: "Bahasa Indonesia",
+    es: "Español",
+    mn: "Монгол хэл",
+  };
+  const targetName = langNames[lang] ?? lang;
+  const langLabel = speaker === "staff" ? `→ ${targetName}` : "→ 한국어";
 
   return (
     <div
@@ -61,7 +63,7 @@ export default function PrompterDisplay({ text, glossaryTerms, speaker, lang }: 
         <div className="flex items-center justify-center min-h-full">
           {isEmpty ? (
             <span className="text-gray-500 text-lg italic">
-              {speaker === "staff" ? "한국어로 말하세요" : lang === "th" ? "พูดภาษาไทย" : "Nói bằng tiếng Việt"}
+              {speaker === "staff" ? "한국어로 말하세요" : `${targetName}로 말하세요`}
             </span>
           ) : (
             <p
