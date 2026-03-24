@@ -12,7 +12,12 @@ export interface GlossaryEntry {
   ko: string;
   th?: string;
   vi?: string;
+  en?: string;
+  id?: string;
+  es?: string;
+  mn?: string;
   category: string;
+  [key: string]: string | undefined;
 }
 
 // In-memory cache to avoid repeated disk reads
@@ -22,7 +27,7 @@ const glossaryCache: Record<string, GlossaryEntry[]> = {};
  * Loads glossary entries from the local JSON file.
  * Caches in memory after first load.
  */
-export function loadGlossary(langPair: 'ko-th' | 'ko-vi'): GlossaryEntry[] {
+export function loadGlossary(langPair: string): GlossaryEntry[] {
   if (glossaryCache[langPair]) {
     return glossaryCache[langPair];
   }
@@ -38,21 +43,17 @@ export function loadGlossary(langPair: 'ko-th' | 'ko-vi'): GlossaryEntry[] {
  * Resolves the lang pair key ('ko-th' | 'ko-vi') from source/target language codes.
  * Returns null if neither language is Korean (unsupported pair).
  */
+type LangPair = 'ko-th' | 'ko-vi' | 'ko-en' | 'ko-id' | 'ko-es' | 'ko-mn';
+
+const SUPPORTED_TARGETS = ['th', 'vi', 'en', 'id', 'es', 'mn'];
+
 function resolveLangPair(
   sourceLang: string,
   targetLang: string
-): 'ko-th' | 'ko-vi' | null {
-  if (
-    (sourceLang === 'ko' && targetLang === 'th') ||
-    (sourceLang === 'th' && targetLang === 'ko')
-  ) {
-    return 'ko-th';
-  }
-  if (
-    (sourceLang === 'ko' && targetLang === 'vi') ||
-    (sourceLang === 'vi' && targetLang === 'ko')
-  ) {
-    return 'ko-vi';
+): LangPair | null {
+  const other = sourceLang === 'ko' ? targetLang : targetLang === 'ko' ? sourceLang : null;
+  if (other && SUPPORTED_TARGETS.includes(other)) {
+    return `ko-${other}` as LangPair;
   }
   return null;
 }
@@ -105,7 +106,8 @@ Translation rules:
     return baseInstruction;
   }
 
-  const targetKey = langPair === 'ko-th' ? 'th' : 'vi';
+  // Extract target language code from lang pair (e.g. 'ko-th' → 'th')
+  const targetKey = langPair.split('-')[1] as keyof GlossaryEntry;
   const glossaryLines = entries
     .filter(e => e.ko && e[targetKey])
     .map(e => `  ${e.ko} = ${e[targetKey]}`)
@@ -144,10 +146,7 @@ export function findGlossaryTermsInText(
   const matched: string[] = [];
 
   for (const entry of entries) {
-    const term =
-      targetLang === 'th' ? entry.th
-      : targetLang === 'vi' ? entry.vi
-      : entry.ko;
+    const term = entry[targetLang] ?? entry.ko;
 
     if (term && lower.includes(term.toLowerCase())) {
       matched.push(term);
