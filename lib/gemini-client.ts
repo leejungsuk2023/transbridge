@@ -83,6 +83,8 @@ export class GeminiLiveSession {
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      // Disable thinking to minimize latency — translate immediately
+      thinkingConfig: { thinkingBudget: 0 },
     };
 
     try {
