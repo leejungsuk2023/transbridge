@@ -191,6 +191,7 @@ export default function SessionPage() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
 
   // Initialize Gemini Live connection + audio capture
@@ -226,6 +227,7 @@ export default function SessionPage() {
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
             const isKorean = /[\uac00-\ud7af]/.test(text);
+            lastInputWasKoreanRef.current = isKorean;
             if (isKorean) {
               setStaffPrompter({ text, glossaryTerms: [], speaker: "staff" });
             } else {
@@ -234,6 +236,20 @@ export default function SessionPage() {
           },
           onTranslatedText: (text) => {
             const isKorean = /[\uac00-\ud7af]/.test(text);
+            const lastInputKorean = lastInputWasKoreanRef.current;
+
+            // FILTER: suppress same-language echo
+            // Korean input → output MUST be foreign. If output is Korean = echo.
+            // Foreign input → output MUST be Korean. If output is foreign = echo.
+            if (lastInputKorean && isKorean) {
+              console.log("[Filter] Suppressed ko→ko echo:", text.slice(0, 30));
+              return;
+            }
+            if (!lastInputKorean && !isKorean) {
+              console.log("[Filter] Suppressed foreign→foreign echo:", text.slice(0, 30));
+              return;
+            }
+
             if (isKorean) {
               setStaffPrompter((prev) => ({ ...prev, text, speaker: "patient" }));
             } else {
