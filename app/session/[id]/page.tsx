@@ -244,6 +244,10 @@ export default function SessionPage() {
             // Feed raw PCM16 ArrayBuffer into the streamer queue
             streamer.addPCM16(new Uint8Array(data));
           },
+          onInterrupt: () => {
+            // Confirmed interrupt (3+ chars of new speech) — stop current playback
+            audioStreamerRef.current?.stop();
+          },
           onError: (err) => setError(err),
           onStateChange: (state) => setConnectionState(state as ConnectionState),
         });

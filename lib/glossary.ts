@@ -157,7 +157,20 @@ Audio recognition may be imperfect. When speech is unclear or partially heard:
 - If a patient mumbles something that sounds like a symptom word, use the closest matching medical term.
 - If a staff member's audio cuts off mid-sentence about registration, complete it naturally.
 - If truly unintelligible, say NOTHING. Do NOT hallucinate or guess randomly.
-- ONLY correct within the bounds of what was likely said. Never add information that wasn't implied by the speaker.`;
+- ONLY correct within the bounds of what was likely said. Never add information that wasn't implied by the speaker.
+
+=== OVERLAPPING SPEECH HANDLING ===
+If two speakers talk at the same time or overlap:
+- Korean speech and ${tgtName} speech may arrive mixed together.
+- ALWAYS process them separately:
+  1. First, translate the Korean part (staff speech) into ${tgtName}.
+  2. Then, translate the ${tgtName} part (patient speech) into Korean.
+- If Korean is heard first and then ${tgtName} interrupts mid-sentence:
+  → Translate the Korean portion heard so far, then handle the ${tgtName} as a new turn.
+- If ${tgtName} is heard first and then Korean interrupts:
+  → Translate the ${tgtName} portion heard so far, then handle the Korean as a new turn.
+- NEVER mix the two speakers' words into one translation.
+- NEVER skip either speaker's words.`;
 
   const langPair = resolveLangPair(sourceLang, targetLang);
   if (!langPair) return baseInstruction;

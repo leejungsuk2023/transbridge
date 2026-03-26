@@ -28,6 +28,8 @@ export interface GeminiLiveCallbacks {
   onAudio: (data: ArrayBuffer) => void;
   onError: (error: string) => void;
   onStateChange: (state: "connecting" | "connected" | "disconnected") => void;
+  /** Called when a confirmed interrupt is detected (3+ chars of new input during playback). */
+  onInterrupt?: () => void;
 }
 
 /**
@@ -61,6 +63,11 @@ export class GeminiLiveSession {
   private session: Session | null = null;
   private callbacks: GeminiLiveCallbacks;
   private config: GeminiLiveConfig;
+
+  // Interrupt threshold tracking: accumulate input chars while output is playing.
+  // Only fire onInterrupt once 3+ characters of new speech are confirmed.
+  private pendingTranscriptLength = 0;
+  private isOutputPlaying = false;
 
   constructor(config: GeminiLiveConfig, callbacks: GeminiLiveCallbacks) {
     this.config = config;
@@ -143,13 +150,31 @@ export class GeminiLiveSession {
     if (message.serverContent) {
       const { serverContent } = message;
 
+      // Gemini signals that its own output was interrupted by new speaker input.
+      // Don't stop playback immediately — wait until 3+ chars of real speech are
+      // confirmed via inputTranscription to filter out coughs/noise.
       if ("interrupted" in serverContent) {
+        this.pendingTranscriptLength = 0;
         return;
       }
 
       // Input audio transcription (what the user said)
       if (serverContent.inputTranscription?.text) {
-        this.callbacks.onOriginalText(serverContent.inputTranscription.text);
+        const inputText = serverContent.inputTranscription.text;
+
+        // Accumulate transcript length during playback for interrupt threshold check
+        if (this.isOutputPlaying) {
+          this.pendingTranscriptLength += inputText.length;
+
+          // Confirmed interrupt: 3+ characters of real speech detected
+          if (this.pendingTranscriptLength >= 3) {
+            this.callbacks.onInterrupt?.();
+            this.isOutputPlaying = false;
+            this.pendingTranscriptLength = 0;
+          }
+        }
+
+        this.callbacks.onOriginalText(inputText);
       }
 
       // Output audio transcription (what Gemini is saying)
@@ -159,6 +184,9 @@ export class GeminiLiveSession {
 
       if (serverContent.modelTurn) {
         const parts = serverContent.modelTurn.parts || [];
+
+        // Mark output as playing when Gemini starts sending audio
+        this.isOutputPlaying = true;
 
         // Extract audio parts — mimeType starts with "audio/pcm"
         for (const part of parts) {
@@ -171,6 +199,12 @@ export class GeminiLiveSession {
             this.callbacks.onAudio(audioBuffer);
           }
         }
+      }
+
+      // Model turn complete — reset playback and interrupt tracking state
+      if (serverContent.turnComplete) {
+        this.isOutputPlaying = false;
+        this.pendingTranscriptLength = 0;
       }
     }
   }
