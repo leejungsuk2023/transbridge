@@ -159,7 +159,7 @@ class AudioStreamer {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-type ConnectionState = "connecting" | "connected" | "disconnected";
+type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
 interface PrompterState {
   text: string;
@@ -184,7 +184,9 @@ export default function SessionPage() {
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
-  // Debug chunk counter removed (was audioChunkCountRef)
+  // Network online/offline state (displayed via OfflineOverlay in layout)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [isOnline, setIsOnline] = useState(true);
 
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
@@ -193,6 +195,25 @@ export default function SessionPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // Token expiry timestamp (ms since epoch) from /api/gemini-token
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const tokenExpiresAtRef = useRef<number | null>(null);
+  // Ref to connection state to read it inside interval without stale closure
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const connectionStateRef = useRef<ConnectionState>("connecting");
+
+  // Send beacon to end session when the user closes/navigates away from the tab
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // sendBeacon is reliable during page unload (unlike fetch)
+      navigator.sendBeacon(
+        "/api/session/end",
+        JSON.stringify({ id: sessionId })
+      );
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [sessionId]);
 
   // Initialize Gemini Live connection + audio capture
   // Matches the pattern from LiveAPIContext.tsx + AudioRecorder.ts in the reference
@@ -210,6 +231,11 @@ export default function SessionPage() {
         const tokenData = await tokenRes.json();
         if (!tokenData.success) throw new Error(tokenData.error ?? "Failed to get token");
         if (cancelled) return;
+
+        // Store token expiry for proactive refresh (expiresAt is epoch ms)
+        if (tokenData.data?.expiresAt) {
+          tokenExpiresAtRef.current = tokenData.data.expiresAt;
+        }
 
         const config: GeminiLiveConfig = tokenData.data;
 
@@ -265,7 +291,11 @@ export default function SessionPage() {
             audioStreamerRef.current?.stop();
           },
           onError: (err) => setError(err),
-          onStateChange: (state) => setConnectionState(state as ConnectionState),
+          onStateChange: (state) => {
+            const cs = state as ConnectionState;
+            connectionStateRef.current = cs;
+            setConnectionState(cs);
+          },
         });
 
         geminiSessionRef.current = session;
@@ -319,6 +349,75 @@ export default function SessionPage() {
     };
   }, [patientLang]);
 
+  // ---------------------------------------------------------------------------
+  // Network state detection — show overlay when offline, reconnect when back online
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      // If the Gemini session lost connection while we were offline, reconnect
+      if (
+        connectionStateRef.current === "disconnected" &&
+        geminiSessionRef.current
+      ) {
+        console.log("[Network] Back online — triggering Gemini reconnect");
+        geminiSessionRef.current.connect();
+      }
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Token refresh — proactively re-fetch token 1 minute before expiry
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const CHECK_INTERVAL_MS = 30_000; // check every 30 seconds
+    const REFRESH_THRESHOLD_MS = 60_000; // refresh 1 minute before expiry
+
+    const intervalId = setInterval(async () => {
+      const expiresAt = tokenExpiresAtRef.current;
+      if (!expiresAt) return;
+
+      const timeLeft = expiresAt - Date.now();
+      if (timeLeft > REFRESH_THRESHOLD_MS) return; // still plenty of time
+
+      console.log("[TokenRefresh] Token expiring soon, refreshing…");
+      try {
+        const res = await fetch("/api/gemini-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourceLang: "ko", targetLang: patientLang }),
+        });
+        const data = await res.json();
+        if (data.success && data.data?.expiresAt) {
+          tokenExpiresAtRef.current = data.data.expiresAt;
+          console.log("[TokenRefresh] Token refreshed successfully");
+          // Note: the current Gemini session continues using the existing connection;
+          // the new token will be used on the next reconnect attempt if needed.
+        } else {
+          // Refresh failed — warn but keep the current session alive
+          console.warn("[TokenRefresh] Refresh failed:", data.error);
+          setError("토큰 갱신에 실패했습니다. 연결이 끊길 수 있습니다.");
+        }
+      } catch (err) {
+        // Network error during refresh — session may still be alive, just warn
+        console.warn("[TokenRefresh] Network error during refresh:", err);
+        setError("토큰 갱신 중 네트워크 오류가 발생했습니다.");
+      }
+    }, CHECK_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [patientLang]);
+
   const langNames: Record<string, string> = {
     th: "태국어", vi: "베트남어", en: "영어", id: "인도네시아어",
     es: "스페인어", mn: "몽골어", yue: "광동어", zh: "북경어",
@@ -347,23 +446,35 @@ export default function SessionPage() {
       ? "연결 중..."
       : connectionState === "connected"
       ? "듣는 중..."
+      : connectionState === "reconnecting"
+      ? "재연결 중..."
       : "연결 끊김";
 
   const stateColor =
     connectionState === "connected"
       ? "bg-green-400"
-      : connectionState === "connecting"
+      : connectionState === "connecting" || connectionState === "reconnecting"
       ? "bg-yellow-400"
       : "bg-red-400";
 
   return (
     <div className="fixed inset-0 bg-gray-950 flex flex-col overflow-hidden">
+      {/* Offline overlay — shown when the device has no network connection */}
+      {!isOnline && (
+        <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl px-8 py-6 text-center max-w-xs mx-4">
+            <p className="text-white text-lg font-semibold mb-2">인터넷 연결이 끊겼습니다</p>
+            <p className="text-gray-400 text-sm">네트워크 연결을 확인해 주세요. 연결되면 자동으로 재연결됩니다.</p>
+          </div>
+        </div>
+      )}
+
       {/* Status bar */}
       <div className="flex-none flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
         <div className="flex items-center gap-2">
           <span
             className={`w-2 h-2 rounded-full ${stateColor} ${
-              connectionState === "connected" ? "animate-pulse" : ""
+              connectionState === "connected" || connectionState === "reconnecting" ? "animate-pulse" : ""
             }`}
           />
           <span className="text-sm text-gray-300 font-medium">
@@ -416,7 +527,7 @@ export default function SessionPage() {
         <div className="flex items-center gap-2">
           <span
             className={`w-2 h-2 rounded-full ${stateColor} ${
-              connectionState === "connected" ? "animate-pulse" : ""
+              connectionState === "connected" || connectionState === "reconnecting" ? "animate-pulse" : ""
             }`}
           />
           <span className="text-xs text-gray-400">🎤 {stateLabel}</span>

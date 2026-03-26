@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { validateEnv } from '@/lib/env-check';
 import type { Session } from '@/types';
 
 /** Verify Supabase JWT from Authorization header and return the user id */
@@ -41,6 +42,14 @@ async function getHospitalId(authUserId: string): Promise<string | null> {
 // ── POST: Create session ─────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
+    const env = validateEnv();
+    if (!env.valid) {
+      return NextResponse.json(
+        { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
+        { status: 500 }
+      );
+    }
+
     const body = await req.json().catch(() => ({}));
     const patientLang = body.patientLang ?? null;
 
@@ -112,6 +121,14 @@ export async function POST(req: NextRequest) {
 // ── GET: Fetch session by ID ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   try {
+    const env = validateEnv();
+    if (!env.valid) {
+      return NextResponse.json(
+        { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
+        { status: 500 }
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
 
@@ -155,6 +172,14 @@ export async function PUT(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
+    const env = validateEnv();
+    if (!env.valid) {
+      return NextResponse.json(
+        { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
+        { status: 500 }
+      );
+    }
+
     const { id, status, patientLang } = await req.json();
 
     if (!id || !status) {

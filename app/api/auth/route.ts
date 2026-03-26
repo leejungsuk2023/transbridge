@@ -6,9 +6,18 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { validateEnv } from '@/lib/env-check';
 
 export async function POST(req: NextRequest) {
   try {
+    const env = validateEnv();
+    if (!env.valid) {
+      return NextResponse.json(
+        { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
+        { status: 500 }
+      );
+    }
+
     const { email, password } = await req.json();
 
     if (!email || !password) {

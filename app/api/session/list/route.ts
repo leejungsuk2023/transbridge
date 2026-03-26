@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { validateEnv } from '@/lib/env-check';
 import type { Session } from '@/types';
 
 /** Verify Supabase JWT from Authorization header and return the user id */
@@ -26,6 +27,14 @@ async function verifyToken(req: NextRequest): Promise<string | null> {
 
 export async function GET(req: NextRequest) {
   try {
+    const env = validateEnv();
+    if (!env.valid) {
+      return NextResponse.json(
+        { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
+        { status: 500 }
+      );
+    }
+
     const supabase = getSupabaseAdmin();
 
     // Try to resolve hospital from auth token first

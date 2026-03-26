@@ -27,7 +27,9 @@ export interface GeminiLiveCallbacks {
   onTranslatedText: (text: string) => void;
   onAudio: (data: ArrayBuffer) => void;
   onError: (error: string) => void;
-  onStateChange: (state: "connecting" | "connected" | "disconnected") => void;
+  onStateChange: (
+    state: "connecting" | "connected" | "disconnected" | "reconnecting"
+  ) => void;
   /** Called when a confirmed interrupt is detected (3+ chars of new input during playback). */
   onInterrupt?: () => void;
 }
@@ -68,6 +70,13 @@ export class GeminiLiveSession {
   // Only fire onInterrupt once 3+ characters of new speech are confirmed.
   private pendingTranscriptLength = 0;
   private isOutputPlaying = false;
+
+  // Reconnection state
+  private reconnectAttempts = 0;
+  private readonly maxReconnectAttempts = 5;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set to true on an explicit disconnect() call to distinguish intentional closes. */
+  private manuallyDisconnected = false;
 
   constructor(config: GeminiLiveConfig, callbacks: GeminiLiveCallbacks) {
     this.config = config;
@@ -117,28 +126,77 @@ export class GeminiLiveSession {
           },
           onerror: (e: ErrorEvent) => {
             this.callbacks.onError(`Gemini error: ${e.message || "unknown"}`);
-            this.callbacks.onStateChange("disconnected");
+            // Don't call onStateChange("disconnected") here — onclose follows
           },
           onclose: (e: CloseEvent) => {
+            if (e.code === 1000 || this.manuallyDisconnected) {
+              // Normal close or user-initiated — no reconnect
+              this.callbacks.onStateChange("disconnected");
+              return;
+            }
             this.callbacks.onError(
               `WS close: code=${e.code} reason=${e.reason || "none"}`
             );
-            if (e.code !== 1000) {
-              this.callbacks.onStateChange("disconnected");
-            }
+            this._scheduleReconnect();
           },
         },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.callbacks.onError(`Connect failed: ${msg}`);
-      this.callbacks.onStateChange("disconnected");
-      throw err;
+      if (!this.manuallyDisconnected) {
+        this._scheduleReconnect();
+      } else {
+        this.callbacks.onStateChange("disconnected");
+      }
+      // Do NOT rethrow — reconnect will handle recovery
     }
+  }
+
+  /**
+   * Schedule a reconnection attempt with exponential backoff.
+   * Delays: 1s → 2s → 4s → 8s → 16s (capped at 30s).
+   */
+  private _scheduleReconnect(): void {
+    if (this.manuallyDisconnected) return;
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.callbacks.onStateChange("disconnected");
+      this.callbacks.onError(
+        "재연결 한도 초과. 페이지를 새로고침 해주세요."
+      );
+      return;
+    }
+
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30000);
+    this.reconnectAttempts += 1;
+    console.log(
+      `[GeminiLiveSession] Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`
+    );
+    this.callbacks.onStateChange("reconnecting");
+
+    // Close stale session before reconnecting
+    if (this.session) {
+      try {
+        this.session.close();
+      } catch {
+        // Ignore errors from closing an already-broken session
+      }
+      this.session = null;
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.manuallyDisconnected) {
+        this.connect();
+      }
+    }, delay);
   }
 
   private _handleMessage(message: LiveServerMessage): void {
     if (message.setupComplete) {
+      // Successful setup — reset reconnect counter
+      this.reconnectAttempts = 0;
       this.callbacks.onStateChange("connected");
       return;
     }
@@ -226,6 +284,15 @@ export class GeminiLiveSession {
   }
 
   disconnect(): void {
+    // Mark as intentional so onclose does not trigger reconnect
+    this.manuallyDisconnected = true;
+
+    // Cancel any pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     if (this.session) {
       this.session.close();
       this.session = null;

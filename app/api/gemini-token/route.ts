@@ -8,19 +8,25 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { buildSystemPrompt } from '@/lib/glossary';
+import { validateEnv } from '@/lib/env-check';
 
 export async function POST(req: NextRequest) {
   try {
+    const env = validateEnv();
+    if (!env.valid) {
+      return NextResponse.json(
+        { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
+        { status: 500 }
+      );
+    }
+
     const { sourceLang, targetLang } = await req.json();
 
     if (!sourceLang || !targetLang) {
-      return NextResponse.json({ error: 'sourceLang and targetLang required' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'sourceLang and targetLang required' }, { status: 400 });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'GEMINI_API_KEY not configured' }, { status: 500 });
-    }
+    const apiKey = process.env.GEMINI_API_KEY!;
 
     // Request ephemeral token from Google AI
     const response = await fetch(
@@ -39,6 +45,10 @@ export async function POST(req: NextRequest) {
       }
     );
 
+    // Token lifetime: 5 minutes. expiresAt is used by the client for proactive refresh.
+    const TOKEN_TTL_MS = 5 * 60 * 1000;
+    const expiresAt = Date.now() + TOKEN_TTL_MS;
+
     if (!response.ok) {
       // Ephemeral token API unavailable — fall back to direct API key
       const systemPrompt = buildSystemPrompt(sourceLang, targetLang);
@@ -49,6 +59,7 @@ export async function POST(req: NextRequest) {
           model: 'gemini-2.5-flash-native-audio-preview-12-2025',
           systemPrompt,
           wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
+          expiresAt,
         },
       });
     }
@@ -63,6 +74,7 @@ export async function POST(req: NextRequest) {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         systemPrompt,
         wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
+        expiresAt,
       },
     });
   } catch (err) {

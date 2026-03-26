@@ -63,12 +63,25 @@ export default function DashboardPage() {
     byLang: {} as Record<string, number>,
   });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [fetchTick, setFetchTick] = useState(0); // increment to re-trigger fetchData
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    // Auto-abort and show error after 10 seconds
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 10000);
+
     async function fetchData() {
+      setLoadError(false);
+      setLoading(true);
+
       const supabase = getSupabaseBrowserClient();
       const { data: { session: authSession } } = await supabase.auth.getSession();
       if (!authSession) {
+        clearTimeout(timeoutId);
         setLoading(false);
         return;
       }
@@ -77,6 +90,7 @@ export default function DashboardPage() {
       try {
         const res = await fetch("/api/session/list?limit=50", {
           headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
         });
         const result = await res.json();
 
@@ -109,13 +123,23 @@ export default function DashboardPage() {
           });
         }
       } catch (err) {
-        console.error("[Dashboard] Failed to fetch sessions:", err);
+        if ((err as Error).name !== "AbortError") {
+          console.error("[Dashboard] Failed to fetch sessions:", err);
+        }
+        setLoadError(true);
       } finally {
+        clearTimeout(timeoutId);
         setLoading(false);
       }
     }
+
     fetchData();
-  }, []);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [fetchTick]);
 
   const handleNewSession = async () => {
     if (!selectedLang) return;
@@ -255,14 +279,14 @@ export default function DashboardPage() {
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <p className="text-xs text-gray-500 mb-1">이번달 통역</p>
             <p className="text-2xl font-bold text-gray-900">
-              {loading ? "—" : stats.total}
-              <span className="text-sm font-normal text-gray-500 ml-1">건</span>
+              {loading || loadError ? "—" : stats.total}
+              {!loading && !loadError && <span className="text-sm font-normal text-gray-500 ml-1">건</span>}
             </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <p className="text-xs text-gray-500 mb-1">총 사용시간</p>
             <p className="text-xl font-bold text-gray-900">
-              {loading ? (
+              {loading || loadError ? (
                 "—"
               ) : stats.totalMinutes >= 60 ? (
                 <>
@@ -280,7 +304,7 @@ export default function DashboardPage() {
             </p>
           </div>
           {/* Top 2 languages by session count this month */}
-          {loading ? (
+          {loading || loadError ? (
             <>
               <div className="bg-white rounded-xl border border-gray-100 p-4">
                 <p className="text-xs text-gray-500 mb-1">—</p>
@@ -322,6 +346,16 @@ export default function DashboardPage() {
           <div className="overflow-x-auto">
             {loading ? (
               <div className="px-5 py-8 text-center text-sm text-gray-400">불러오는 중...</div>
+            ) : loadError ? (
+              <div className="px-5 py-8 text-center">
+                <p className="text-sm text-gray-500 mb-3">데이터를 불러올 수 없습니다</p>
+                <button
+                  onClick={() => setFetchTick((t) => t + 1)}
+                  className="text-sm text-blue-600 hover:text-blue-800 font-medium underline underline-offset-2 transition"
+                >
+                  다시 불러오기
+                </button>
+              </div>
             ) : sessions.length === 0 ? (
               <div className="px-5 py-8 text-center text-sm text-gray-400">아직 통역 이력이 없습니다</div>
             ) : (
