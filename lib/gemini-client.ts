@@ -76,6 +76,11 @@ export class GeminiLiveSession {
     this.callbacks.onStateChange("connecting");
 
     // LiveConnectConfig matches Google's reference exactly.
+    // temperature=0 + topP=0.1 + topK=1: maximally deterministic output —
+    // reduces creative/LLM behavior so the model sticks to literal translation
+    // rather than generating explanations or answers.
+    // These fields are set directly on LiveConnectConfig (not nested under
+    // generationConfig) per @google/genai SDK types (LiveConnectConfig interface).
     const liveConfig: LiveConnectConfig = {
       responseModalities: [Modality.AUDIO],
       systemInstruction: {
@@ -85,6 +90,13 @@ export class GeminiLiveSession {
       outputAudioTranscription: {},
       // Disable thinking to minimize latency — translate immediately
       thinkingConfig: { thinkingBudget: 0 },
+      // Force near-deterministic output to suppress LLM answer/explain behavior.
+      // temperature=0: no randomness — always picks the highest-probability token.
+      // topP=0.1: only consider the top 10% probability mass — very narrow sampling.
+      // topK=1: only the single most likely token is considered at each step.
+      temperature: 0,
+      topP: 0.1,
+      topK: 1,
     };
 
     try {
