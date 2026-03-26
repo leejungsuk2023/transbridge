@@ -222,6 +222,13 @@ export default function SessionPage() {
 
     async function init() {
       try {
+        // 0. Validate session ID exists in DB (prevent invalid/fake sessions)
+        const sessionCheck = await fetch(`/api/session?id=${sessionId}`);
+        const sessionData = await sessionCheck.json();
+        if (!sessionData.success) {
+          throw new Error("유효하지 않은 세션입니다. 대시보드에서 다시 시작해주세요.");
+        }
+
         // 1. Get connection config from server (API key or ephemeral token)
         const tokenRes = await fetch("/api/gemini-token", {
           method: "POST",

@@ -53,6 +53,14 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const patientLang = body.patientLang ?? null;
 
+    const VALID_LANGS = ['th', 'vi', 'en', 'id', 'es', 'mn', 'yue', 'zh', 'ja', 'fr', 'de'];
+    if (!patientLang || !VALID_LANGS.includes(patientLang)) {
+      return NextResponse.json(
+        { success: false, error: `patientLang is required (valid: ${VALID_LANGS.join(', ')})` },
+        { status: 400 }
+      );
+    }
+
     const supabase = getSupabaseAdmin();
 
     // Try to get hospital from auth token if available
