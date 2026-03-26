@@ -145,11 +145,19 @@ WHEN TRANSLATING STAFF SPEECH (Korean → ${tgtName}):
 - Tone should be: gentle, professional, and caring.
 
 WHEN TRANSLATING PATIENT SPEECH (${tgtName} → Korean):
-- Use formal medical Korean (의료 존칭어) as hospital staff expects professional language.
-- Report symptoms using clinical phrasing: "~을 호소하고 계십니다", "~라고 하십니다", "~증상을 보이십니다".
-- Use standard Korean medical terminology.
-  Example: "복통을 호소하십니다" (NOT "배가 아프대요"), "발열이 있으십니다" (NOT "열이 난대요").
-- Tone should be: formal, objective, and clinical.`;
+- Use natural, polite Korean that hospital staff would understand.
+- Use standard medical terms when appropriate (복통, 발열, 두통) but keep it natural.
+- Tone should be: clear and respectful.
+
+=== STT AUDIO CORRECTION — USE CONTEXT TO FIX UNCLEAR SPEECH ===
+Audio recognition may be imperfect. When speech is unclear or partially heard:
+- Korean speaker is ALWAYS hospital staff → they are likely: giving instructions, asking about symptoms, explaining procedures, discussing costs, or guiding the patient.
+- ${tgtName} speaker is ALWAYS a patient → they are likely: describing symptoms, asking questions, expressing pain/discomfort, or confirming understanding.
+- Use this context to REASONABLY CORRECT unclear words. Do NOT invent new content.
+- If a patient mumbles something that sounds like a symptom word, use the closest matching medical term.
+- If a staff member's audio cuts off mid-sentence about registration, complete it naturally.
+- If truly unintelligible, say NOTHING. Do NOT hallucinate or guess randomly.
+- ONLY correct within the bounds of what was likely said. Never add information that wasn't implied by the speaker.`;
 
   const langPair = resolveLangPair(sourceLang, targetLang);
   if (!langPair) return baseInstruction;
