@@ -275,10 +275,19 @@ export default function SessionPage() {
           onOriginalText: (text) => {
             const isKorean = /[\uac00-\ud7af]/.test(text);
             lastInputWasKoreanRef.current = isKorean;
+            // Accumulate text — Gemini sends fragments, append to build full sentence
             if (isKorean) {
-              setStaffPrompter({ text, glossaryTerms: [], speaker: "staff" });
+              setStaffPrompter((prev) => ({
+                text: prev.speaker === "staff" ? prev.text + text : text,
+                glossaryTerms: [],
+                speaker: "staff",
+              }));
             } else {
-              setPatientPrompter({ text, glossaryTerms: [], speaker: "patient" });
+              setPatientPrompter((prev) => ({
+                text: prev.speaker === "patient" ? prev.text + text : text,
+                glossaryTerms: [],
+                speaker: "patient",
+              }));
             }
           },
           onTranslatedText: (text) => {
@@ -286,8 +295,6 @@ export default function SessionPage() {
             const lastInputKorean = lastInputWasKoreanRef.current;
 
             // FILTER: suppress same-language echo
-            // Korean input → output MUST be foreign. If output is Korean = echo.
-            // Foreign input → output MUST be Korean. If output is foreign = echo.
             if (lastInputKorean && isKorean) {
               console.log("[Filter] Suppressed ko→ko echo:", text.slice(0, 30));
               return;
@@ -297,10 +304,19 @@ export default function SessionPage() {
               return;
             }
 
+            // Accumulate translated text
             if (isKorean) {
-              setStaffPrompter((prev) => ({ ...prev, text, speaker: "patient" }));
+              setStaffPrompter((prev) => ({
+                ...prev,
+                text: prev.speaker === "patient" ? prev.text + text : text,
+                speaker: "patient",
+              }));
             } else {
-              setPatientPrompter((prev) => ({ ...prev, text, speaker: "staff" }));
+              setPatientPrompter((prev) => ({
+                ...prev,
+                text: prev.speaker === "staff" ? prev.text + text : text,
+                speaker: "staff",
+              }));
             }
           },
           onAudio: (data: ArrayBuffer) => {
