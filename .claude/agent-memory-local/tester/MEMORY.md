@@ -26,5 +26,29 @@
 - Port 3000: SyncBridge (different project at ~/g sync/client-web) — do NOT test MedTranslate here
 - Port 3002: MedTranslate (Trans Bridge) — always use this port
 
+## CLI Tools on Node v24
+- `npx next lint` and `npx tsc --noEmit` fail on Node v24 (module not found)
+- Use `node node_modules/next/dist/bin/next lint` and `node node_modules/typescript/bin/tsc --noEmit` instead
+- Build: `node node_modules/next/dist/bin/next build`
+
+## API Behavior Notes
+- POST /api/session with empty `{}` body succeeds (patientLang: null) — no server-side validation
+- POST /api/session with invalid lang returns `{"success":false,"error":"Failed to create session"}` — standardized error format confirmed
+- POST /api/session with valid lang returns `{"success":true,"data":{...}}` — standardized success format
+
+## Error Boundaries
+- `app/error.tsx` — global error boundary with "다시 시도" button
+- `app/session/[id]/error.tsx` — session-specific with "다시 시도" + "대시보드로 돌아가기"
+- These are NOT triggered by invalid session IDs — page renders normally with invalid ID
+
+## OfflineOverlay
+- Mounted in `app/layout.tsx` — renders `null` when online (correct behavior)
+- When offline: shows modal overlay "인터넷 연결 끊김"
+- Cannot test offline state via Playwright without network throttling
+
+## Session Page Behavior with Invalid ID
+- `/session/invalid-id?lang=th` renders the session UI normally (no 404 or error)
+- This is a known gap — no server-side session ID validation before rendering
+
 ## Memory Files
 - [feedback_playwright_clicks.md](feedback_playwright_clicks.md) — Playwright click workaround details

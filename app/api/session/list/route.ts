@@ -72,11 +72,12 @@ export async function GET(req: NextRequest) {
     // This handles cases where the client disconnected without calling the end endpoint.
     // ended_at is set to now(); duration_sec remains NULL (shown as "—" in UI).
     const staleThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const nowIso = new Date().toISOString();
     const { error: staleError } = await supabase
       .from('sessions')
-      .update({ status: 'ended', ended_at: new Date().toISOString() })
+      .update({ status: 'ended', ended_at: nowIso })
       .eq('hospital_id', hospitalId)
-      .in('status', ['active', 'waiting'])
+      .neq('status', 'ended')
       .lt('started_at', staleThreshold);
 
     if (staleError) {

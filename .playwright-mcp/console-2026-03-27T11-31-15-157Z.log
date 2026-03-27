@@ -1,0 +1,7 @@
+[     907ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://qxjqqkgslmqzztdiqyen.supabase.co/auth/v1/token?grant_type=refresh_token:0
+[     909ms] [ERROR] AuthApiError: Invalid Refresh Token: Refresh Token Not Found
+    at tW (https://transbridge.vercel.app/_next/static/chunks/383-68b80188c3d77cf2.js:24:43476)
+    at async tV (https://transbridge.vercel.app/_next/static/chunks/383-68b80188c3d77cf2.js:24:44475)
+    at async tH (https://transbridge.vercel.app/_next/static/chunks/383-68b80188c3d77cf2.js:24:44131)
+    at async r (https://transbridge.vercel.app/_next/static/chunks/383-68b80188c3d77cf2.js:37:25653)
+    at async https://transbridge.vercel.app/_next/static/chunks/383-68b80188c3d77cf2.js:37:25899 @ https://transbridge.vercel.app/_next/static/chunks/117-baab43fc83142998.js:0
