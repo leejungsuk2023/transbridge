@@ -114,7 +114,10 @@ export async function GET(req: NextRequest) {
       ...(row.duration_sec !== null && row.duration_sec !== undefined && { durationSec: row.duration_sec }),
     }));
 
-    return NextResponse.json({ success: true, data: { sessions, total: total ?? 0 } });
+    return NextResponse.json(
+      { success: true, data: { sessions, total: total ?? 0 } },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
+    );
   } catch (error) {
     console.error('[GET /api/session/list] Error:', error);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
