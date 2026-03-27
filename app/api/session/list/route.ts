@@ -70,31 +70,18 @@ export async function GET(req: NextRequest) {
 
     // Auto-close stale sessions: any session still active/waiting after 2 hours is orphaned.
     // This handles cases where the client disconnected without calling the end endpoint.
+    // ended_at is set to now(); duration_sec remains NULL (shown as "—" in UI).
     const staleThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const { data: staleSessions } = await supabase
+    const { error: staleError } = await supabase
       .from('sessions')
-      .select('id, started_at')
+      .update({ status: 'ended', ended_at: new Date().toISOString() })
       .eq('hospital_id', hospitalId)
       .in('status', ['active', 'waiting'])
       .lt('started_at', staleThreshold);
 
-    if (staleSessions && staleSessions.length > 0) {
-      // Bulk-update each stale session: cap ended_at at started_at + 2h and compute real duration_sec
-      await Promise.all(
-        staleSessions.map((s) => {
-          const startMs = new Date(s.started_at).getTime();
-          const endedAt = new Date(startMs + 2 * 60 * 60 * 1000);
-          const durationSec = Math.floor((endedAt.getTime() - startMs) / 1000);
-          return supabase
-            .from('sessions')
-            .update({
-              status: 'ended',
-              ended_at: endedAt.toISOString(),
-              duration_sec: durationSec,
-            })
-            .eq('id', s.id);
-        })
-      );
+    if (staleError) {
+      // Non-fatal — log but continue so the list still returns
+      console.error('[GET /api/session/list] Stale session cleanup error:', staleError);
     }
 
     // Count total matching sessions
