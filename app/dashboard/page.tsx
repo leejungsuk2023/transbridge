@@ -88,6 +88,19 @@ export default function DashboardPage() {
       }
       const token = authSession.access_token;
 
+      // Fetch hospital name for the logged-in user
+      try {
+        const userId = authSession.user.id;
+        const { data: hospital } = await supabase
+          .from("hospitals")
+          .select("name")
+          .eq("auth_user_id", userId)
+          .single();
+        if (hospital?.name) setHospitalName(hospital.name);
+      } catch {
+        // Ignore — hospital name is cosmetic
+      }
+
       try {
         const res = await fetch("/api/session/list?limit=100", {
           headers: { Authorization: `Bearer ${token}`, "Cache-Control": "no-cache" },
@@ -208,7 +221,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <h1 className="text-base font-bold text-gray-900">MedTranslate</h1>
-              <p className="text-xs text-gray-500">서울성형외과</p>
+              <p className="text-xs text-gray-500">{hospitalName || "병원"}</p>
             </div>
           </div>
           <button
