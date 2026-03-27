@@ -65,6 +65,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [fetchTick, setFetchTick] = useState(0); // increment to re-trigger fetchData
+  const [hospitalName, setHospitalName] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -88,8 +89,8 @@ export default function DashboardPage() {
       const token = authSession.access_token;
 
       try {
-        const res = await fetch("/api/session/list?limit=50", {
-          headers: { Authorization: `Bearer ${token}` },
+        const res = await fetch("/api/session/list?limit=100", {
+          headers: { Authorization: `Bearer ${token}`, "Cache-Control": "no-cache" },
           signal: controller.signal,
         });
         const result = await res.json();
