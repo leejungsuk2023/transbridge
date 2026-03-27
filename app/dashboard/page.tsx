@@ -371,7 +371,7 @@ export default function DashboardPage() {
                 <tbody className="divide-y divide-gray-50">
                   {sessions.map((session) => {
                     const langInfo = LANG_MAP[session.patientLang] ?? { flag: "🌐", name: session.patientLang ?? "—" };
-                    const isActive = session.status === "active";
+                    const isActive = session.status !== "ended";
                     return (
                       <tr key={session.id} className="hover:bg-gray-50 transition">
                         <td className="px-5 py-3.5 text-gray-600">{formatDate(session.startedAt)}</td>
