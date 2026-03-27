@@ -202,17 +202,31 @@ export default function SessionPage() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const connectionStateRef = useRef<ConnectionState>("connecting");
 
-  // Send beacon to end session when the user closes/navigates away from the tab
+  // End session when user closes tab, navigates away, or switches apps
   useEffect(() => {
-    const handleBeforeUnload = () => {
-      // sendBeacon is reliable during page unload (unlike fetch)
-      navigator.sendBeacon(
-        "/api/session/end",
-        JSON.stringify({ id: sessionId })
-      );
+    const endSession = () => {
+      // sendBeacon with Blob to set correct Content-Type (JSON)
+      const blob = new Blob([JSON.stringify({ id: sessionId })], {
+        type: "application/json",
+      });
+      navigator.sendBeacon("/api/session/end", blob);
     };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+
+    // Tab close / browser close / URL change
+    window.addEventListener("beforeunload", endSession);
+
+    // Mobile: app switch / tab switch (visibilitychange fires more reliably on mobile)
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        endSession();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("beforeunload", endSession);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [sessionId]);
 
   // Initialize Gemini Live connection + audio capture
