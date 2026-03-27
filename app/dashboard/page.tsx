@@ -371,7 +371,10 @@ export default function DashboardPage() {
                 <tbody className="divide-y divide-gray-50">
                   {sessions.map((session) => {
                     const langInfo = LANG_MAP[session.patientLang] ?? { flag: "🌐", name: session.patientLang ?? "—" };
-                    const isActive = session.status !== "ended";
+                    // A session is only considered "진행중" if status is not ended AND it started within the last 2 hours.
+                    // Older non-ended sessions are orphaned (client crashed) and are shown as "완료".
+                    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+                    const isActive = session.status !== "ended" && new Date(session.startedAt).getTime() > twoHoursAgo;
                     return (
                       <tr key={session.id} className="hover:bg-gray-50 transition">
                         <td className="px-5 py-3.5 text-gray-600">{formatDate(session.startedAt)}</td>
