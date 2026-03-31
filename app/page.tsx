@@ -79,23 +79,8 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         {/* Logo / Title */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-4">
-            <svg
-              className="w-9 h-9 text-white"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"
-              />
-            </svg>
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">MedTranslate</h1>
-          <p className="text-sm text-gray-500 mt-1">의료 통역 서비스</p>
+          <img src="/logo.png" alt="TransBridge" className="w-40 h-auto mx-auto mb-4" />
+          <p className="text-sm text-gray-500 mt-1">실시간 의료 통역 서비스</p>
         </div>
 
         {/* Login Form */}

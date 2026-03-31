@@ -15,8 +15,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "MedTranslate — 의료 통역 서비스",
-  description: "QR 기반 실시간 의료 통역 서비스",
+  title: "TransBridge — 실시간 의료 통역",
+  description: "1초 만에 시작되는 11개 언어 실시간 의료 통역 서비스",
 };
 
 export default function RootLayout({
