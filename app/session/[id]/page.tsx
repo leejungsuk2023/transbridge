@@ -194,6 +194,7 @@ export default function SessionPage() {
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
+  const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   // Token expiry timestamp (ms since epoch) from /api/gemini-token
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -268,11 +269,22 @@ export default function SessionPage() {
         // 3. Create AudioStreamer for playback (reference audio-streamer.ts)
         const streamer = new AudioStreamer(new AudioContext({ sampleRate: 24000 }));
         audioStreamerRef.current = streamer;
+        // Unmute mic when TTS playback finishes
+        streamer.onComplete = () => {
+          isPlayingAudioRef.current = false;
+        };
         await streamer.resume();
 
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
+            // ECHO FILTER: ignore inputTranscription that arrives while TTS is playing
+            // — this is the speaker output being picked up by the mic
+            if (isPlayingAudioRef.current) {
+              console.log("[Echo] Suppressed input during TTS playback:", text.slice(0, 20));
+              return;
+            }
+
             const isKorean = /[\uac00-\ud7af]/.test(text);
             lastInputWasKoreanRef.current = isKorean;
             // Accumulate text — Gemini sends fragments, append to build full sentence
@@ -320,7 +332,8 @@ export default function SessionPage() {
             }
           },
           onAudio: (data: ArrayBuffer) => {
-            // Feed raw PCM16 ArrayBuffer into the streamer queue
+            // Mute mic input while playing TTS to prevent echo feedback loop
+            isPlayingAudioRef.current = true;
             streamer.addPCM16(new Uint8Array(data));
           },
           onInterrupt: () => {
@@ -356,6 +369,10 @@ export default function SessionPage() {
         workletNode.port.onmessage = (e: MessageEvent) => {
           const int16Buffer: ArrayBuffer = e.data?.data?.int16arrayBuffer;
           if (!int16Buffer) return;
+
+          // ECHO PREVENTION: skip sending mic data while TTS audio is playing
+          // This prevents the speaker output from being picked up and re-translated
+          if (isPlayingAudioRef.current) return;
 
           // Convert to base64 and send — matches arrayBufferToBase64 in reference
           const base64 = arrayBufferToBase64(int16Buffer);
