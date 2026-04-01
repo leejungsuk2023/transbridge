@@ -278,6 +278,9 @@ export default function SessionPage() {
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
+            // ECHO FILTER: ignore inputTranscription that arrives while TTS is playing
+            if (isPlayingAudioRef.current) return;
+
             const isKorean = /[\uac00-\ud7af]/.test(text);
             lastInputWasKoreanRef.current = isKorean;
             // Accumulate text — Gemini sends fragments, append to build full sentence
