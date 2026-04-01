@@ -98,7 +98,7 @@ export class GeminiLiveSession {
     // These fields are set directly on LiveConnectConfig (not nested under
     // generationConfig) per @google/genai SDK types (LiveConnectConfig interface).
     const liveConfig: LiveConnectConfig = {
-      responseModalities: [Modality.AUDIO],
+      responseModalities: [Modality.AUDIO, Modality.TEXT],
       systemInstruction: {
         parts: [{ text: this.config.systemPrompt }],
       },
@@ -216,7 +216,8 @@ export class GeminiLiveSession {
         return;
       }
 
-      // Input audio transcription (what the user said)
+      // Input audio transcription — used only for interrupt detection
+      // Corrected original text now comes from model text output instead
       if (serverContent.inputTranscription?.text) {
         const inputText = serverContent.inputTranscription.text;
 
@@ -231,8 +232,6 @@ export class GeminiLiveSession {
             this.pendingTranscriptLength = 0;
           }
         }
-
-        this.callbacks.onOriginalText(inputText);
       }
 
       // Output audio transcription (what Gemini is saying)
@@ -246,8 +245,12 @@ export class GeminiLiveSession {
         // Mark output as playing when Gemini starts sending audio
         this.isOutputPlaying = true;
 
-        // Extract audio parts — mimeType starts with "audio/pcm"
         for (const part of parts) {
+          // Corrected original text (TEXT modality) — show on prompter
+          if (part.text) {
+            this.callbacks.onOriginalText(part.text);
+          }
+          // Audio translation
           if (
             part.inlineData &&
             part.inlineData.mimeType?.startsWith("audio/pcm") &&
