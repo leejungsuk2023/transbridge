@@ -8,11 +8,13 @@ export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 
+const NO_CACHE = { 'Cache-Control': 'no-store, no-cache, must-revalidate' } as const;
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const id = body?.id;
-    if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+    if (!id) return NextResponse.json({ error: 'id required' }, { status: 400, headers: NO_CACHE });
 
     const supabase = getSupabaseAdmin();
     const { data: session } = await supabase
@@ -22,7 +24,7 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (!session || session.status === 'ended') {
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true }, { headers: NO_CACHE });
     }
 
     const endedAt = new Date();
@@ -39,8 +41,8 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', id);
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true }, { headers: NO_CACHE });
   } catch {
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+    return NextResponse.json({ error: 'Internal error' }, { status: 500, headers: NO_CACHE });
   }
 }

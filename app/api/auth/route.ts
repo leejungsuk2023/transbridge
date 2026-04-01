@@ -8,13 +8,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { validateEnv } from '@/lib/env-check';
 
+const NO_CACHE = { 'Cache-Control': 'no-store, no-cache, must-revalidate' } as const;
+
 export async function POST(req: NextRequest) {
   try {
     const env = validateEnv();
     if (!env.valid) {
       return NextResponse.json(
         { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
-        { status: 500 }
+        { status: 500, headers: NO_CACHE }
       );
     }
 
@@ -23,7 +25,7 @@ export async function POST(req: NextRequest) {
     if (!email || !password) {
       return NextResponse.json(
         { success: false, error: 'Email and password are required' },
-        { status: 400 }
+        { status: 400, headers: NO_CACHE }
       );
     }
 
@@ -38,7 +40,7 @@ export async function POST(req: NextRequest) {
     if (authError || !authData.user) {
       return NextResponse.json(
         { success: false, error: authError?.message ?? 'Invalid credentials' },
-        { status: 401 }
+        { status: 401, headers: NO_CACHE }
       );
     }
 
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest) {
     if (hospitalError || !hospital) {
       return NextResponse.json(
         { success: false, error: 'Hospital account not found' },
-        { status: 404 }
+        { status: 404, headers: NO_CACHE }
       );
     }
 
@@ -63,12 +65,12 @@ export async function POST(req: NextRequest) {
         user: { id: authData.user.id, email: authData.user.email },
         hospital,
       },
-    });
+    }, { headers: NO_CACHE });
   } catch (error) {
     console.error('[POST /api/auth] Error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal server error' },
-      { status: 500 }
+      { status: 500, headers: NO_CACHE }
     );
   }
 }

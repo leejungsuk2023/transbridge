@@ -11,6 +11,8 @@ import { getSupabaseAdmin } from '@/lib/supabase';
 import { validateEnv } from '@/lib/env-check';
 import type { Session } from '@/types';
 
+const NO_CACHE = { 'Cache-Control': 'no-store, no-cache, must-revalidate' } as const;
+
 /** Verify Supabase JWT from Authorization header and return the user id */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function verifyToken(req: NextRequest): Promise<string | null> {
@@ -46,7 +48,7 @@ export async function POST(req: NextRequest) {
     if (!env.valid) {
       return NextResponse.json(
         { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
-        { status: 500 }
+        { status: 500, headers: NO_CACHE }
       );
     }
 
@@ -57,7 +59,7 @@ export async function POST(req: NextRequest) {
     if (!patientLang || !VALID_LANGS.includes(patientLang)) {
       return NextResponse.json(
         { success: false, error: `patientLang is required (valid: ${VALID_LANGS.join(', ')})` },
-        { status: 400 }
+        { status: 400, headers: NO_CACHE }
       );
     }
 
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!hospitalId) {
-      return NextResponse.json({ success: false, error: 'No hospital found' }, { status: 404 });
+      return NextResponse.json({ success: false, error: 'No hospital found' }, { status: 404, headers: NO_CACHE });
     }
 
     const { data, error } = await supabase
@@ -108,7 +110,7 @@ export async function POST(req: NextRequest) {
 
     if (error || !data) {
       console.error('[POST /api/session] Insert error:', error);
-      return NextResponse.json({ success: false, error: 'Failed to create session' }, { status: 500 });
+      return NextResponse.json({ success: false, error: 'Failed to create session' }, { status: 500, headers: NO_CACHE });
     }
 
     const session: Session = {
@@ -119,10 +121,10 @@ export async function POST(req: NextRequest) {
       startedAt: new Date(data.started_at),
     };
 
-    return NextResponse.json({ success: true, data: { session } }, { status: 201 });
+    return NextResponse.json({ success: true, data: { session } }, { status: 201, headers: NO_CACHE });
   } catch (error) {
     console.error('[POST /api/session] Error:', error);
-    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500, headers: NO_CACHE });
   }
 }
 
@@ -133,7 +135,7 @@ export async function GET(req: NextRequest) {
     if (!env.valid) {
       return NextResponse.json(
         { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
-        { status: 500 }
+        { status: 500, headers: NO_CACHE }
       );
     }
 
@@ -141,7 +143,7 @@ export async function GET(req: NextRequest) {
     const id = searchParams.get('id');
 
     if (!id) {
-      return NextResponse.json({ success: false, error: 'Session ID is required' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'Session ID is required' }, { status: 400, headers: NO_CACHE });
     }
 
     const supabase = getSupabaseAdmin();
@@ -152,7 +154,7 @@ export async function GET(req: NextRequest) {
       .single();
 
     if (error || !data) {
-      return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404 });
+      return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404, headers: NO_CACHE });
     }
 
     const session: Session = {
@@ -165,10 +167,10 @@ export async function GET(req: NextRequest) {
       ...(data.duration_sec !== null && data.duration_sec !== undefined && { durationSec: data.duration_sec }),
     };
 
-    return NextResponse.json({ success: true, data: { session } });
+    return NextResponse.json({ success: true, data: { session } }, { headers: NO_CACHE });
   } catch (error) {
     console.error('[GET /api/session] Error:', error);
-    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500, headers: NO_CACHE });
   }
 }
 
@@ -184,7 +186,7 @@ export async function PATCH(req: NextRequest) {
     if (!env.valid) {
       return NextResponse.json(
         { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
-        { status: 500 }
+        { status: 500, headers: NO_CACHE }
       );
     }
 
@@ -193,7 +195,7 @@ export async function PATCH(req: NextRequest) {
     if (!id || !status) {
       return NextResponse.json(
         { success: false, error: 'id and status are required' },
-        { status: 400 }
+        { status: 400, headers: NO_CACHE }
       );
     }
 
@@ -207,7 +209,7 @@ export async function PATCH(req: NextRequest) {
       .single();
 
     if (fetchError || !existing) {
-      return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404 });
+      return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404, headers: NO_CACHE });
     }
 
     const updates: Record<string, unknown> = { status };
@@ -232,7 +234,7 @@ export async function PATCH(req: NextRequest) {
 
     if (error || !data) {
       console.error('[PATCH /api/session] Update error:', error);
-      return NextResponse.json({ success: false, error: 'Failed to update session' }, { status: 500 });
+      return NextResponse.json({ success: false, error: 'Failed to update session' }, { status: 500, headers: NO_CACHE });
     }
 
     const session: Session = {
@@ -245,9 +247,9 @@ export async function PATCH(req: NextRequest) {
       ...(data.duration_sec !== null && data.duration_sec !== undefined && { durationSec: data.duration_sec }),
     };
 
-    return NextResponse.json({ success: true, data: { session } });
+    return NextResponse.json({ success: true, data: { session } }, { headers: NO_CACHE });
   } catch (error) {
     console.error('[PATCH /api/session] Error:', error);
-    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500, headers: NO_CACHE });
   }
 }

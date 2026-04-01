@@ -10,20 +10,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { buildSystemPrompt } from '@/lib/glossary';
 import { validateEnv } from '@/lib/env-check';
 
+const NO_CACHE = { 'Cache-Control': 'no-store, no-cache, must-revalidate' } as const;
+
 export async function POST(req: NextRequest) {
   try {
     const env = validateEnv();
     if (!env.valid) {
       return NextResponse.json(
         { success: false, error: `Server misconfiguration: missing ${env.missing.join(', ')}` },
-        { status: 500 }
+        { status: 500, headers: NO_CACHE }
       );
     }
 
     const { sourceLang, targetLang } = await req.json();
 
     if (!sourceLang || !targetLang) {
-      return NextResponse.json({ success: false, error: 'sourceLang and targetLang required' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'sourceLang and targetLang required' }, { status: 400, headers: NO_CACHE });
     }
 
     const apiKey = process.env.GEMINI_API_KEY!;
@@ -61,7 +63,7 @@ export async function POST(req: NextRequest) {
           wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
           expiresAt,
         },
-      });
+      }, { headers: NO_CACHE });
     }
 
     const tokenData = await response.json();
@@ -76,9 +78,9 @@ export async function POST(req: NextRequest) {
         wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
         expiresAt,
       },
-    });
+    }, { headers: NO_CACHE });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers: NO_CACHE });
   }
 }

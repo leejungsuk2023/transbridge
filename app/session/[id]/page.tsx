@@ -41,7 +41,7 @@ class AudioStreamer {
   private endOfQueueAudioSource: AudioBufferSourceNode | null = null;
   public onComplete = () => {};
 
-  constructor(private context: AudioContext) {
+  constructor(public context: AudioContext) {
     this.gainNode = this.context.createGain();
     this.gainNode.connect(this.context.destination);
   }
@@ -334,6 +334,10 @@ export default function SessionPage() {
           onAudio: (data: ArrayBuffer) => {
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
+            // Ensure AudioContext is active (Chrome autoplay policy may suspend it)
+            if (streamer.context.state === "suspended") {
+              streamer.context.resume();
+            }
             streamer.addPCM16(new Uint8Array(data));
           },
           onInterrupt: () => {
