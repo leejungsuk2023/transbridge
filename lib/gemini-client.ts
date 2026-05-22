@@ -84,6 +84,11 @@ export class GeminiLiveSession {
   /** Set to true on an explicit disconnect() call to distinguish intentional closes. */
   private manuallyDisconnected = false;
 
+  /** Pre-opened next session after GoAway is received. Promoted to `this.session` once setupComplete arrives. */
+  private nextSession: Session | null = null;
+  /** True while a handover is in flight — used to suppress reconnect when the old session closes. */
+  private isHandingOver = false;
+
   constructor(config: GeminiLiveConfig, callbacks: GeminiLiveCallbacks) {
     this.config = config;
     this.callbacks = callbacks;
@@ -94,9 +99,12 @@ export class GeminiLiveSession {
     this.client = new GoogleGenAI({ apiKey: key });
   }
 
-  async connect(): Promise<void> {
-    this.callbacks.onStateChange("connecting");
-
+  /**
+   * Opens a new Gemini Live WebSocket connection.
+   * When isHandover=true, the connection is a pre-opened next session for GoAway handover.
+   * Messages on a handover connection are held until setupComplete, then the session is promoted.
+   */
+  private async _openConnection(isHandover: boolean): Promise<Session> {
     // LiveConnectConfig matches Google's reference exactly.
     // temperature=0 + topP=0.1 + topK=1: maximally deterministic output —
     // reduces creative/LLM behavior so the model sticks to literal translation
@@ -119,18 +127,55 @@ export class GeminiLiveSession {
       topK: 5,
     };
 
-    try {
-      this.session = await this.client.live.connect({
-        model: this.config.model,
-        config: liveConfig,
-        callbacks: {
-          onopen: () => {
-            // Setup message sent, waiting for setupComplete
-          },
-          onmessage: (message: LiveServerMessage) => {
+    // Local flag in closure: tracks whether this handover connection has been promoted.
+    // After promotion, subsequent messages should flow through _handleMessage normally.
+    let promoted = false;
+
+    return await this.client.live.connect({
+      model: this.config.model,
+      config: liveConfig,
+      callbacks: {
+        onopen: () => {
+          // Setup message sent, waiting for setupComplete — same for both paths
+        },
+        onmessage: (message: LiveServerMessage) => {
+          if (!isHandover) {
+            // Primary connection: route all messages through the normal handler
             this._handleMessage(message);
-          },
-          onerror: (e: ErrorEvent) => {
+          } else {
+            // Handover connection: different routing before vs after promotion
+            if (!promoted) {
+              // Before promotion: only act on setupComplete; ignore everything else
+              if (message.setupComplete) {
+                promoted = true;
+                this._promoteNextSession();
+                // After promotion, this connection IS the current session.
+                // The setupComplete itself is handled inside _promoteNextSession/
+                // _handleMessage after swap — no need to forward it here since
+                // the state is already "connected" from the original session.
+              }
+              // Ignore all other messages before promotion (stray audio/transcription not expected)
+            } else {
+              // After promotion: forward all messages through the normal handler
+              this._handleMessage(message);
+            }
+          }
+        },
+        onerror: (e: ErrorEvent) => {
+          if (isHandover && !promoted) {
+            // Handover pre-open failed — abort handover silently; old session will fall
+            // back to normal reconnect on close
+            logError({
+              errorType: 'websocket_error',
+              errorMessage: e.message || 'unknown',
+              sessionId: this.config.sessionId,
+              patientLang: this.config.patientLang,
+              context: { handover: true },
+            });
+            this.isHandingOver = false;
+            this.nextSession = null;
+          } else {
+            // Primary connection (or post-promotion): existing behavior
             this.callbacks.onError(`Gemini error: ${e.message || "unknown"}`);
             logError({
               errorType: 'websocket_error',
@@ -140,28 +185,57 @@ export class GeminiLiveSession {
               context: { model: this.config.model },
             });
             // Don't call onStateChange("disconnected") here — onclose follows
-          },
-          onclose: (e: CloseEvent) => {
-            if (e.code === 1000 || this.manuallyDisconnected) {
-              // Normal close or user-initiated — no reconnect
-              this.callbacks.onStateChange("disconnected");
-              return;
-            }
-            this.callbacks.onError(
-              `WS close: code=${e.code} reason=${e.reason || "none"}`
-            );
+          }
+        },
+        onclose: (e: CloseEvent) => {
+          if (isHandover && !promoted) {
+            // Handover connection closed before promotion — abort handover silently
             logError({
               errorType: 'websocket_close',
               errorCode: e.code,
               errorMessage: e.reason || 'none',
               sessionId: this.config.sessionId,
               patientLang: this.config.patientLang,
-              context: { wasClean: e.wasClean, model: this.config.model, attempt: this.reconnectAttempts },
+              context: { handover: true },
             });
-            this._scheduleReconnect();
-          },
+            this.isHandingOver = false;
+            this.nextSession = null;
+            return;
+          }
+
+          // Primary connection close (or post-promotion, i.e. the old session closing after handover)
+          if (this.isHandingOver) {
+            // This is the OLD session closing after a successful handover — suppress reconnect
+            this.isHandingOver = false;
+            return;
+          }
+
+          if (e.code === 1000 || this.manuallyDisconnected) {
+            // Normal close or user-initiated — no reconnect
+            this.callbacks.onStateChange("disconnected");
+            return;
+          }
+          this.callbacks.onError(
+            `WS close: code=${e.code} reason=${e.reason || "none"}`
+          );
+          logError({
+            errorType: 'websocket_close',
+            errorCode: e.code,
+            errorMessage: e.reason || 'none',
+            sessionId: this.config.sessionId,
+            patientLang: this.config.patientLang,
+            context: { wasClean: e.wasClean, model: this.config.model, attempt: this.reconnectAttempts },
+          });
+          this._scheduleReconnect();
         },
-      });
+      },
+    });
+  }
+
+  async connect(): Promise<void> {
+    this.callbacks.onStateChange("connecting");
+    try {
+      this.session = await this._openConnection(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.callbacks.onError(`Connect failed: ${msg}`);
@@ -235,6 +309,13 @@ export class GeminiLiveSession {
       return;
     }
 
+    if (message.goAway) {
+      const timeLeft = message.goAway.timeLeft ?? 'unknown';
+      console.log(`[GeminiLiveSession] GoAway received. timeLeft=${timeLeft}. Pre-opening next session.`);
+      this._handleGoAway().catch(() => {});  // fire-and-forget, internal method swallows errors
+      return;
+    }
+
     if (message.toolCall) {
       return;
     }
@@ -302,6 +383,53 @@ export class GeminiLiveSession {
   }
 
   /**
+   * Handles a GoAway message by pre-opening the next WebSocket connection.
+   * The new connection is held in nextSession until setupComplete arrives,
+   * at which point _promoteNextSession() atomically swaps it to this.session.
+   */
+  private async _handleGoAway(): Promise<void> {
+    // Already handing over — ignore duplicate GoAway
+    if (this.isHandingOver || this.nextSession) return;
+    if (this.manuallyDisconnected) return;
+
+    this.isHandingOver = true;
+    try {
+      this.nextSession = await this._openConnection(true);
+    } catch (err) {
+      // Pre-open failed — abort handover; old session will fall back to normal reconnect on close
+      this.isHandingOver = false;
+      this.nextSession = null;
+      const msg = err instanceof Error ? err.message : String(err);
+      logError({
+        errorType: 'gemini_connect_failed',
+        errorMessage: msg,
+        sessionId: this.config.sessionId,
+        patientLang: this.config.patientLang,
+        context: { handover: true },
+      });
+    }
+  }
+
+  /**
+   * Atomically swaps nextSession → this.session after the handover setupComplete arrives.
+   * Closes the old session (triggering its onclose which will silently no-op due to isHandingOver).
+   * isHandingOver stays true until the old session's onclose fires and clears it.
+   */
+  private _promoteNextSession(): void {
+    if (!this.nextSession) return;
+    const oldSession = this.session;
+    this.session = this.nextSession;
+    this.nextSession = null;
+    // Note: isHandingOver remains TRUE until the old session's onclose fires,
+    // so that we suppress the reconnect path for the expected old-session close.
+    console.log('[GeminiLiveSession] Handover complete. Swapped to new session.');
+    try { oldSession?.close(); } catch {}
+    // Reset reconnect counter since the new session is healthy
+    this.reconnectAttempts = 0;
+    this.callbacks.onStateChange("connected");
+  }
+
+  /**
    * Send a PCM audio chunk to Gemini.
    * Matches sendRealtimeInput from the reference genai-live-client.ts exactly.
    * @param base64PcmChunk Base64-encoded Int16 PCM at 16kHz mono
@@ -337,6 +465,13 @@ export class GeminiLiveSession {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+
+    // Abort any in-flight handover
+    if (this.nextSession) {
+      try { this.nextSession.close(); } catch {}
+      this.nextSession = null;
+    }
+    this.isHandingOver = false;
 
     if (this.session) {
       this.session.close();

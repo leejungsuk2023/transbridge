@@ -316,19 +316,26 @@ export default function SessionPage() {
 
             const isKorean = /[\uac00-\ud7af]/.test(text);
             lastInputWasKoreanRef.current = isKorean;
-            // Accumulate text — Gemini sends fragments, append to build full sentence
+
+            // Native-audio model's inputTranscription is less accurate than its
+            // end-to-end translation. Showing the raw transcript made users think
+            // the app was broken even when the translation was correct. Show a
+            // friendly status on the speaker's side; the listener still sees the
+            // accurate translation in their area via onTranslatedText.
+            const STATUS_TEXT = "🎤 잘 들었어요. 통역 시작합니다...";
+
             if (isKorean) {
-              setStaffPrompter((prev) => ({
-                text: prev.speaker === "staff" ? prev.text + text : text,
-                glossaryTerms: [],
-                speaker: "staff",
-              }));
+              setStaffPrompter((prev) =>
+                prev.text === STATUS_TEXT && prev.speaker === "staff"
+                  ? prev
+                  : { text: STATUS_TEXT, glossaryTerms: [], speaker: "staff" }
+              );
             } else {
-              setPatientPrompter((prev) => ({
-                text: prev.speaker === "patient" ? prev.text + text : text,
-                glossaryTerms: [],
-                speaker: "patient",
-              }));
+              setPatientPrompter((prev) =>
+                prev.text === STATUS_TEXT && prev.speaker === "patient"
+                  ? prev
+                  : { text: STATUS_TEXT, glossaryTerms: [], speaker: "patient" }
+              );
             }
           },
           onTranslatedText: (text) => {

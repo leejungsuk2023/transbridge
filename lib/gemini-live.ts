@@ -8,7 +8,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import type { LiveServerMessage, Session } from '@google/genai';
 import { buildSystemPrompt, findGlossaryTermsInText } from './glossary';
 
-const MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
+const MODEL = 'gemini-3.1-flash-live-preview';
 
 export interface GeminiTranslateInput {
   audioChunk: Buffer;             // webm/opus audio from MediaRecorder

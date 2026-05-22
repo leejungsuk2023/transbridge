@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
 
     // Request ephemeral token from Google AI
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-native-audio-preview-12-2025:generateEphemeralToken`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-live-preview:generateEphemeralToken`,
       {
         method: 'POST',
         headers: {
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
         success: true,
         data: {
           apiKey: apiKey,
-          model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+          model: 'gemini-3.1-flash-live-preview',
           systemPrompt,
           wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
           expiresAt,
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
       success: true,
       data: {
         ephemeralToken: tokenData.ephemeralToken?.token,
-        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        model: 'gemini-3.1-flash-live-preview',
         systemPrompt,
         wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
         expiresAt,
