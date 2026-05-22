@@ -436,9 +436,11 @@ export class GeminiLiveSession {
    */
   sendAudio(base64PcmChunk: string): void {
     if (!this.session) return;
-    // The SDK's sendRealtimeInput takes { media: { mimeType, data } }
+    // gemini-3.1-flash-live-preview deprecates realtime_input.media_chunks
+    // (the field the SDK fills when given { media: ... }). Use { audio: ... }
+    // which maps to the new realtime_input.audio field.
     this.session.sendRealtimeInput({
-      media: {
+      audio: {
         mimeType: "audio/pcm;rate=16000",
         data: base64PcmChunk,
       },
