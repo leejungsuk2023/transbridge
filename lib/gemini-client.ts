@@ -11,6 +11,7 @@ import {
   Modality,
   Session,
 } from "@google/genai";
+import { logError } from "./error-logger";
 
 export interface GeminiLiveConfig {
   apiKey?: string;
@@ -20,6 +21,9 @@ export interface GeminiLiveConfig {
   // wsUrl is kept in the interface for backward compatibility but is no longer used.
   // The SDK derives the endpoint from the model name and API key.
   wsUrl?: string;
+  sessionId?: string;
+  hospitalId?: string;
+  patientLang?: string;
 }
 
 export interface GeminiLiveCallbacks {
@@ -32,6 +36,8 @@ export interface GeminiLiveCallbacks {
   ) => void;
   /** Called when a confirmed interrupt is detected (3+ chars of new input during playback). */
   onInterrupt?: () => void;
+  /** Called when reconnect attempts are exhausted — lets the UI offer a manual retry button. */
+  onReconnectExhausted?: () => void;
 }
 
 /**
@@ -73,7 +79,7 @@ export class GeminiLiveSession {
 
   // Reconnection state
   private reconnectAttempts = 0;
-  private readonly maxReconnectAttempts = 5;
+  private readonly maxReconnectAttempts = 8;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set to true on an explicit disconnect() call to distinguish intentional closes. */
   private manuallyDisconnected = false;
@@ -126,6 +132,13 @@ export class GeminiLiveSession {
           },
           onerror: (e: ErrorEvent) => {
             this.callbacks.onError(`Gemini error: ${e.message || "unknown"}`);
+            logError({
+              errorType: 'websocket_error',
+              errorMessage: e.message || 'unknown',
+              sessionId: this.config.sessionId,
+              patientLang: this.config.patientLang,
+              context: { model: this.config.model },
+            });
             // Don't call onStateChange("disconnected") here — onclose follows
           },
           onclose: (e: CloseEvent) => {
@@ -137,6 +150,14 @@ export class GeminiLiveSession {
             this.callbacks.onError(
               `WS close: code=${e.code} reason=${e.reason || "none"}`
             );
+            logError({
+              errorType: 'websocket_close',
+              errorCode: e.code,
+              errorMessage: e.reason || 'none',
+              sessionId: this.config.sessionId,
+              patientLang: this.config.patientLang,
+              context: { wasClean: e.wasClean, model: this.config.model, attempt: this.reconnectAttempts },
+            });
             this._scheduleReconnect();
           },
         },
@@ -144,6 +165,12 @@ export class GeminiLiveSession {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.callbacks.onError(`Connect failed: ${msg}`);
+      logError({
+        errorType: 'gemini_connect_failed',
+        errorMessage: msg,
+        sessionId: this.config.sessionId,
+        patientLang: this.config.patientLang,
+      });
       if (!this.manuallyDisconnected) {
         this._scheduleReconnect();
       } else {
@@ -165,6 +192,13 @@ export class GeminiLiveSession {
       this.callbacks.onError(
         "재연결 한도 초과. 페이지를 새로고침 해주세요."
       );
+      logError({
+        errorType: 'reconnect_exhausted',
+        sessionId: this.config.sessionId,
+        patientLang: this.config.patientLang,
+        context: { attempts: this.reconnectAttempts },
+      });
+      this.callbacks.onReconnectExhausted?.();
       return;
     }
 
@@ -281,6 +315,17 @@ export class GeminiLiveSession {
         data: base64PcmChunk,
       },
     });
+  }
+
+  /**
+   * Manual retry after reconnect attempts were exhausted.
+   * Resets the reconnect counter and the manuallyDisconnected flag,
+   * then attempts a fresh connection.
+   */
+  retryConnect(): Promise<void> {
+    this.reconnectAttempts = 0;
+    this.manuallyDisconnected = false;
+    return this.connect();
   }
 
   disconnect(): void {

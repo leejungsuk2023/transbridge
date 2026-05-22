@@ -9,6 +9,7 @@ import {
   GeminiLiveConfig,
   arrayBufferToBase64,
 } from "@/lib/gemini-client";
+import { logError } from "@/lib/error-logger";
 
 // ---------------------------------------------------------------------------
 // Session timer hook
@@ -184,6 +185,7 @@ export default function SessionPage() {
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
+  const [reconnectExhausted, setReconnectExhausted] = useState(false);
   // Network online/offline state (displayed via OfflineOverlay in layout)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isOnline, setIsOnline] = useState(true);
@@ -238,20 +240,38 @@ export default function SessionPage() {
     async function init() {
       try {
         // 0. Validate session ID exists in DB (prevent invalid/fake sessions)
-        const sessionCheck = await fetch(`/api/session?id=${sessionId}`);
+        let sessionCheck: Response;
+        try {
+          sessionCheck = await fetch(`/api/session?id=${sessionId}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logError({ errorType: 'session_fetch', errorMessage: msg, sessionId, patientLang });
+          throw err;
+        }
         const sessionData = await sessionCheck.json();
         if (!sessionData.success) {
+          logError({ errorType: 'session_fetch', errorMessage: "Invalid session", errorCode: sessionCheck.status, sessionId, patientLang });
           throw new Error("유효하지 않은 세션입니다. 대시보드에서 다시 시작해주세요.");
         }
 
         // 1. Get connection config from server (API key or ephemeral token)
-        const tokenRes = await fetch("/api/gemini-token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sourceLang: "ko", targetLang: patientLang }),
-        });
+        let tokenRes: Response;
+        try {
+          tokenRes = await fetch("/api/gemini-token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceLang: "ko", targetLang: patientLang }),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logError({ errorType: 'token_fetch', errorMessage: msg, sessionId, patientLang });
+          throw err;
+        }
         const tokenData = await tokenRes.json();
-        if (!tokenData.success) throw new Error(tokenData.error ?? "Failed to get token");
+        if (!tokenData.success) {
+          logError({ errorType: 'token_fetch', errorMessage: tokenData.error ?? "Failed to get token", errorCode: tokenRes.status, sessionId, patientLang });
+          throw new Error(tokenData.error ?? "Failed to get token");
+        }
         if (cancelled) return;
 
         // Store token expiry for proactive refresh (expiresAt is epoch ms)
@@ -259,11 +279,18 @@ export default function SessionPage() {
           tokenExpiresAtRef.current = tokenData.data.expiresAt;
         }
 
-        const config: GeminiLiveConfig = tokenData.data;
+        const config: GeminiLiveConfig = { ...tokenData.data, sessionId, patientLang };
 
         // 2. Create AudioContext at 16kHz — the reference AudioRecorder sets sampleRate: 16000
         //    so no downsampling is needed in the worklet.
-        const audioContext = new AudioContext({ sampleRate: 16000 });
+        let audioContext: AudioContext;
+        try {
+          audioContext = new AudioContext({ sampleRate: 16000 });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logError({ errorType: 'audio_context', errorMessage: msg, sessionId, patientLang, context: { state: 'create' } });
+          throw err;
+        }
         audioContextRef.current = audioContext;
 
         // 3. Create AudioStreamer for playback (reference audio-streamer.ts)
@@ -273,7 +300,13 @@ export default function SessionPage() {
         streamer.onComplete = () => {
           isPlayingAudioRef.current = false;
         };
-        await streamer.resume();
+        try {
+          await streamer.resume();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logError({ errorType: 'audio_context', errorMessage: msg, sessionId, patientLang, context: { state: streamer.context.state } });
+          throw err;
+        }
 
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
@@ -332,7 +365,16 @@ export default function SessionPage() {
             isPlayingAudioRef.current = true;
             // Ensure AudioContext is active (Chrome autoplay policy may suspend it)
             if (streamer.context.state === "suspended") {
-              streamer.context.resume();
+              streamer.context.resume().catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                logError({
+                  errorType: 'audio_context',
+                  errorMessage: msg,
+                  sessionId,
+                  patientLang,
+                  context: { state: 'resume_failed_in_onAudio' },
+                });
+              });
             }
             streamer.addPCM16(new Uint8Array(data));
           },
@@ -346,6 +388,7 @@ export default function SessionPage() {
             connectionStateRef.current = cs;
             setConnectionState(cs);
           },
+          onReconnectExhausted: () => setReconnectExhausted(true),
         });
 
         geminiSessionRef.current = session;
@@ -354,7 +397,14 @@ export default function SessionPage() {
 
         // 5. Start microphone capture
         //    Reference AudioRecorder uses { audio: true } without extra constraints
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logError({ errorType: 'mic_permission', errorMessage: msg, sessionId, patientLang });
+          throw err;
+        }
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         streamRef.current = stream;
 
@@ -362,7 +412,13 @@ export default function SessionPage() {
 
         // 6. Load AudioWorklet — matches reference audio-recorder.ts pattern
         //    The worklet sends { event: "chunk", data: { int16arrayBuffer } }
-        await audioContext.audioWorklet.addModule("/audio-processor.js");
+        try {
+          await audioContext.audioWorklet.addModule("/audio-processor.js");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logError({ errorType: 'audio_worklet', errorMessage: msg, sessionId, patientLang });
+          throw err;
+        }
         const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
         workletNodeRef.current = workletNode;
 
@@ -549,6 +605,23 @@ export default function SessionPage() {
           <span>{error}</span>
           <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4">
             ✕
+          </button>
+        </div>
+      )}
+
+      {/* Reconnect exhausted — offer manual retry */}
+      {reconnectExhausted && (
+        <div className="flex-none bg-gray-900/90 text-gray-200 text-sm px-4 py-2 flex items-center justify-between border-b border-gray-700">
+          <span>재연결에 실패했습니다.</span>
+          <button
+            onClick={() => {
+              setReconnectExhausted(false);
+              setError(null);
+              geminiSessionRef.current?.retryConnect();
+            }}
+            className="text-sm text-red-400 hover:text-red-300 font-medium px-3 py-1.5 rounded-lg hover:bg-red-950 transition ml-4"
+          >
+            다시 시도
           </button>
         </div>
       )}

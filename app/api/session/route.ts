@@ -98,6 +98,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'No hospital found' }, { status: 404, headers: NO_CACHE });
     }
 
+    // End any lingering active sessions for this hospital — prevents
+    // zombie sessions when a user starts a new session without ending
+    // the previous one (e.g., closed the tab without sendBeacon firing).
+    const { data: stale } = await supabase
+      .from('sessions')
+      .select('id, started_at')
+      .eq('hospital_id', hospitalId)
+      .eq('status', 'active');
+
+    if (stale && stale.length > 0) {
+      const now = new Date();
+      const updates = stale.map(s => ({
+        id: s.id,
+        status: 'ended' as const,
+        ended_at: now.toISOString(),
+        duration_sec: Math.floor(
+          (now.getTime() - new Date(s.started_at).getTime()) / 1000
+        ),
+      }));
+      // Bulk upsert by id
+      for (const u of updates) {
+        await supabase
+          .from('sessions')
+          .update({ status: u.status, ended_at: u.ended_at, duration_sec: u.duration_sec })
+          .eq('id', u.id);
+      }
+      console.log(`[POST /api/session] Auto-ended ${stale.length} stale active session(s) for hospital ${hospitalId}`);
+    }
+
     const { data, error } = await supabase
       .from('sessions')
       .insert({
