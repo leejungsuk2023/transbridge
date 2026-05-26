@@ -5,11 +5,14 @@
  */
 
 import {
+  ActivityHandling,
+  EndSensitivity,
   GoogleGenAI,
   LiveConnectConfig,
   LiveServerMessage,
   Modality,
   Session,
+  StartSensitivity,
 } from "@google/genai";
 import { logError } from "./error-logger";
 
@@ -125,6 +128,19 @@ export class GeminiLiveSession {
       temperature: 0.2,
       topP: 0.3,
       topK: 5,
+      // VAD tuning for medical interpretation — speakers (especially patients
+      // in a foreign language) frequently pause mid-sentence. Defaults are too
+      // eager and cut speakers off; require 1.8s of silence before committing
+      // end-of-turn so natural pauses don't trigger premature translation.
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
+          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
+          silenceDurationMs: 1800,
+          prefixPaddingMs: 100,
+        },
+        activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+      },
     };
 
     // Local flag in closure: tracks whether this handover connection has been promoted.
