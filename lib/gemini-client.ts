@@ -137,7 +137,7 @@ export class GeminiLiveSession {
           startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
           endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
           silenceDurationMs: 1800,
-          prefixPaddingMs: 100,
+          prefixPaddingMs: 300,
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
       },
