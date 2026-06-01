@@ -339,11 +339,14 @@ export class GeminiLiveSession {
     if (message.serverContent) {
       const { serverContent } = message;
 
-      // Gemini signals that its own output was interrupted by new speaker input.
-      // Don't stop playback immediately — wait until 3+ chars of real speech are
-      // confirmed via inputTranscription to filter out coughs/noise.
+      // Gemini's server-side VAD detected the user speaking over the model's
+      // output (barge-in). This is the authoritative interrupt signal — stop our
+      // playback immediately so the new turn can flow, exactly like ChatGPT/Gemini
+      // voice mode. (The mic is kept open during TTS so this can happen at all.)
       if ("interrupted" in serverContent) {
         this.pendingTranscriptLength = 0;
+        this.isOutputPlaying = false;
+        this.callbacks.onInterrupt?.();
         return;
       }
 

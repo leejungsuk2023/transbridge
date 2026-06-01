@@ -390,8 +390,13 @@ export default function SessionPage() {
             streamer.addPCM16(new Uint8Array(data));
           },
           onInterrupt: () => {
-            // Confirmed interrupt (3+ chars of new speech) — stop current playback
+            // Barge-in confirmed — stop the current TTS playback AND clear the
+            // "playing" flag. Previously stop() did not reset isPlayingAudioRef,
+            // so the flag stayed true forever and the mic stayed muted permanently
+            // (the "먹통"/freeze after interrupting). Resetting it here guarantees
+            // the app returns to listening immediately.
             audioStreamerRef.current?.stop();
+            isPlayingAudioRef.current = false;
           },
           onError: (err) => setError(err),
           onStateChange: (state) => {
@@ -406,11 +411,17 @@ export default function SessionPage() {
         await session.connect();
         if (cancelled) { session.disconnect(); return; }
 
-        // 5. Start microphone capture
-        //    Reference AudioRecorder uses { audio: true } without extra constraints
+        // 5. Start microphone capture with echo cancellation so the open mic does
+        //    not pick up our own TTS during barge-in (replaces the old mic-mute).
         let stream: MediaStream;
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logError({ errorType: 'mic_permission', errorMessage: msg, sessionId, patientLang });
@@ -437,9 +448,11 @@ export default function SessionPage() {
           const int16Buffer: ArrayBuffer = e.data?.data?.int16arrayBuffer;
           if (!int16Buffer) return;
 
-          // ECHO PREVENTION: skip sending mic data while TTS audio is playing
-          // This prevents the speaker output from being picked up and re-translated
-          if (isPlayingAudioRef.current) return;
+          // BARGE-IN: the mic stays open during TTS playback so the user can
+          // interrupt naturally (like ChatGPT/Gemini voice mode). Echo is handled
+          // by getUserMedia's echoCancellation below instead of muting the mic.
+          // Muting here used to make interruption impossible and could strand the
+          // app in a permanently muted state — see the onInterrupt handler.
 
           // Convert to base64 and send — matches arrayBufferToBase64 in reference
           const base64 = arrayBufferToBase64(int16Buffer);
