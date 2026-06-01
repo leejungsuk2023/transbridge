@@ -342,11 +342,15 @@ export default function SessionPage() {
             const isKorean = /[\uac00-\ud7af]/.test(text);
             const lastInputKorean = lastInputWasKoreanRef.current;
 
-            // FILTER: suppress same-language echo
-            if (lastInputKorean && isKorean) {
-              console.log("[Filter] Suppressed ko→ko echo:", text.slice(0, 30));
-              return;
-            }
+            // FILTER: suppress same-language echo.
+            // NOTE: We intentionally NO LONGER suppress ko→ko here. Korean output
+            // almost always means foreign speech was translated to Korean — exactly
+            // what we must show. The old ko→ko guard ate legitimate Korean
+            // translations whenever input-language tracking went stale (common when
+            // Thai STT misses the patient's speech), producing the "Korean never
+            // appears" symptom. The audio-feedback echo loop is already prevented
+            // upstream by the mic-mute during TTS (isPlayingAudioRef), so this
+            // guard was redundant.
             if (!lastInputKorean && !isKorean) {
               console.log("[Filter] Suppressed foreign→foreign echo:", text.slice(0, 30));
               return;
