@@ -143,6 +143,9 @@ class AudioStreamer {
       this.gainNode = this.context.createGain();
       this.gainNode.connect(this.context.destination);
     }, 200);
+    // Any stop (interrupt, cleanup, error) must release the "playing" state so the
+    // caller un-mutes the mic. onComplete is idempotent (just resets a flag/timer).
+    this.onComplete();
   }
 
   async resume() {
@@ -197,6 +200,7 @@ export default function SessionPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
   const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo
+  const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-unmute safety net
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   // Token expiry timestamp (ms since epoch) from /api/gemini-token
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -299,6 +303,10 @@ export default function SessionPage() {
         // Unmute mic when TTS playback finishes
         streamer.onComplete = () => {
           isPlayingAudioRef.current = false;
+          if (playbackWatchdogRef.current) {
+            clearTimeout(playbackWatchdogRef.current);
+            playbackWatchdogRef.current = null;
+          }
         };
         try {
           await streamer.resume();
@@ -374,6 +382,15 @@ export default function SessionPage() {
           onAudio: (data: ArrayBuffer) => {
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
+            // Watchdog: guarantee the mic is never left muted forever if onComplete
+            // and stop() both somehow fail to fire. TTS for one turn is always well
+            // under 15s, so this only ever triggers on a genuine stuck state.
+            if (playbackWatchdogRef.current) clearTimeout(playbackWatchdogRef.current);
+            playbackWatchdogRef.current = setTimeout(() => {
+              isPlayingAudioRef.current = false;
+              playbackWatchdogRef.current = null;
+              audioStreamerRef.current?.stop();
+            }, 15000);
             // Ensure AudioContext is active (Chrome autoplay policy may suspend it)
             if (streamer.context.state === "suspended") {
               streamer.context.resume().catch((err: unknown) => {
@@ -390,13 +407,15 @@ export default function SessionPage() {
             streamer.addPCM16(new Uint8Array(data));
           },
           onInterrupt: () => {
-            // Barge-in confirmed — stop the current TTS playback AND clear the
-            // "playing" flag. Previously stop() did not reset isPlayingAudioRef,
-            // so the flag stayed true forever and the mic stayed muted permanently
-            // (the "먹통"/freeze after interrupting). Resetting it here guarantees
-            // the app returns to listening immediately.
+            // Stop playback and release the playing state. stop() now also calls
+            // onComplete (which resets the flag + watchdog), but we reset here too
+            // for immediacy. This is the path that used to freeze the app.
             audioStreamerRef.current?.stop();
             isPlayingAudioRef.current = false;
+            if (playbackWatchdogRef.current) {
+              clearTimeout(playbackWatchdogRef.current);
+              playbackWatchdogRef.current = null;
+            }
           },
           onError: (err) => setError(err),
           onStateChange: (state) => {
@@ -411,8 +430,9 @@ export default function SessionPage() {
         await session.connect();
         if (cancelled) { session.disconnect(); return; }
 
-        // 5. Start microphone capture with echo cancellation so the open mic does
-        //    not pick up our own TTS during barge-in (replaces the old mic-mute).
+        // 5. Start microphone capture. echoCancellation/noiseSuppression are kept
+        //    as defense-in-depth for ambient echo while the mic is active between
+        //    turns; the primary echo defense is muting the mic during TTS playback.
         let stream: MediaStream;
         try {
           stream = await navigator.mediaDevices.getUserMedia({
@@ -448,11 +468,14 @@ export default function SessionPage() {
           const int16Buffer: ArrayBuffer = e.data?.data?.int16arrayBuffer;
           if (!int16Buffer) return;
 
-          // BARGE-IN: the mic stays open during TTS playback so the user can
-          // interrupt naturally (like ChatGPT/Gemini voice mode). Echo is handled
-          // by getUserMedia's echoCancellation below instead of muting the mic.
-          // Muting here used to make interruption impossible and could strand the
-          // app in a permanently muted state — see the onInterrupt handler.
+          // HALF-DUPLEX ECHO PREVENTION: do not send mic audio while TTS is
+          // playing. On an open phone speaker (the common setup — users rarely
+          // wear earphones) browser echoCancellation cannot remove our own TTS,
+          // so an open mic re-feeds the Korean TTS back to Gemini and it gets
+          // mis-transcribed as the patient's language. Muting during playback is
+          // the only reliable fix on web. The freeze this used to cause is now
+          // prevented by the playback watchdog + stop()->onComplete (see below).
+          if (isPlayingAudioRef.current) return;
 
           // Convert to base64 and send — matches arrayBufferToBase64 in reference
           const base64 = arrayBufferToBase64(int16Buffer);
@@ -475,6 +498,10 @@ export default function SessionPage() {
 
     return () => {
       cancelled = true;
+      if (playbackWatchdogRef.current) {
+        clearTimeout(playbackWatchdogRef.current);
+        playbackWatchdogRef.current = null;
+      }
       workletNodeRef.current?.disconnect();
       audioContextRef.current?.close();
       audioStreamerRef.current?.stop();
