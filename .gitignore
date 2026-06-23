@@ -42,3 +42,8 @@ docker-compose.override.yml
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# stray local artifacts
+.claude/worktrees/
+.playwright-mcp/
+transbridge-demo-*.png
