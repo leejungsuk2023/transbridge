@@ -27,8 +27,6 @@ export interface GeminiLiveConfig {
   sessionId?: string;
   hospitalId?: string;
   patientLang?: string;
-  /** Short glossary instruction for translation-only models (e.g. gemini-3.5-live-translate-preview). */
-  glossaryInstruction?: string;
 }
 
 export interface GeminiLiveCallbacks {

@@ -1,0 +1,19 @@
+- generic [active]:
+  - generic [ref=e1]:
+    - generic [ref=e2]:
+      - generic [ref=e5]: 태국어 ↔ 한국어
+      - button "종료" [ref=e6] [cursor=pointer]
+    - generic [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: 직원 발화
+        - generic [ref=e11]: → ภาษาไทย
+      - generic [ref=e14]: 한국어로 말하세요
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - generic [ref=e19]: 직원 발화
+        - generic [ref=e20]: → ภาษาไทย
+      - generic [ref=e23]: 한국어로 말하세요
+    - generic [ref=e24]:
+      - generic [ref=e27]: 🎤 연결 중...
+      - generic [ref=e28]: 00:00
+  - alert [ref=e29]

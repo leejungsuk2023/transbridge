@@ -9,7 +9,6 @@ import {
   GeminiLiveConfig,
   arrayBufferToBase64,
 } from "@/lib/gemini-client";
-import { GeminiTranslateSession } from "@/lib/gemini-translate-client";
 import { logError } from "@/lib/error-logger";
 
 // ---------------------------------------------------------------------------
@@ -184,20 +183,18 @@ export default function SessionPage() {
 
   const sessionId = params.id as string;
   const patientLang = (searchParams.get("lang") ?? "th") as PatientLang;
-  const engineParam = searchParams.get('engine');
 
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
   const [reconnectExhausted, setReconnectExhausted] = useState(false);
-  const [activeEngine, setActiveEngine] = useState<'native' | 'translate'>(engineParam === 'translate' ? 'translate' : 'native');
   // Network online/offline state (displayed via OfflineOverlay in layout)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isOnline, setIsOnline] = useState(true);
 
   const timer = useSessionTimer();
-  const geminiSessionRef = useRef<GeminiLiveSession | GeminiTranslateSession | null>(null);
+  const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -319,9 +316,8 @@ export default function SessionPage() {
           throw err;
         }
 
-        // 4. Create session — branch on activeEngine.
-        //    Both branches use the same callbacks object so all downstream logic is identical.
-        const callbacks: import("@/lib/gemini-client").GeminiLiveCallbacks = {
+        // 4. Create Gemini Live session with callbacks
+        const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
             // ECHO FILTER: ignore inputTranscription that arrives while TTS is playing
             if (isPlayingAudioRef.current) return;
@@ -427,25 +423,8 @@ export default function SessionPage() {
             connectionStateRef.current = cs;
             setConnectionState(cs);
           },
-          onReconnectExhausted: () => {
-            if (activeEngine === 'translate') {
-              // Auto-fallback: translate engine exhausted — switch to native engine.
-              // setActiveEngine triggers a re-run of this effect with the native engine.
-              console.log('[Engine] Translate engine reconnect exhausted — falling back to native engine');
-              setActiveEngine('native');
-            } else {
-              // Native engine exhausted — show the manual retry UI as before.
-              setReconnectExhausted(true);
-            }
-          },
-        };
-
-        const session = activeEngine === 'translate'
-          ? new GeminiTranslateSession(
-              { ...tokenData.data, model: tokenData.data.translateModel, sessionId, patientLang },
-              callbacks,
-            )
-          : new GeminiLiveSession(config, callbacks);
+          onReconnectExhausted: () => setReconnectExhausted(true),
+        });
 
         geminiSessionRef.current = session;
         await session.connect();
@@ -529,7 +508,7 @@ export default function SessionPage() {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       geminiSessionRef.current?.disconnect();
     };
-  }, [patientLang, activeEngine]);
+  }, [patientLang]);
 
   // ---------------------------------------------------------------------------
   // Network state detection — show overlay when offline, reconnect when back online
@@ -730,9 +709,6 @@ export default function SessionPage() {
             }`}
           />
           <span className="text-xs text-gray-400">🎤 {stateLabel}</span>
-          {activeEngine === 'translate' && (
-            <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300">엔진: 통역전용(beta)</span>
-          )}
         </div>
         <span className="text-xs text-gray-500 font-mono">{timer}</span>
       </div>

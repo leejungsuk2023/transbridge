@@ -7,7 +7,7 @@
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { buildSystemPrompt, buildGlossaryInstruction } from '@/lib/glossary';
+import { buildSystemPrompt } from '@/lib/glossary';
 import { validateEnv } from '@/lib/env-check';
 
 const NO_CACHE = { 'Cache-Control': 'no-store, no-cache, must-revalidate' } as const;
@@ -54,7 +54,6 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       // Ephemeral token API unavailable — fall back to direct API key
       const systemPrompt = buildSystemPrompt(sourceLang, targetLang);
-      const glossaryInstruction = buildGlossaryInstruction(sourceLang, targetLang);
       return NextResponse.json({
         success: true,
         data: {
@@ -63,15 +62,12 @@ export async function POST(req: NextRequest) {
           systemPrompt,
           wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
           expiresAt,
-          translateModel: 'gemini-3.5-live-translate-preview',
-          glossaryInstruction,
         },
       }, { headers: NO_CACHE });
     }
 
     const tokenData = await response.json();
     const systemPrompt = buildSystemPrompt(sourceLang, targetLang);
-    const glossaryInstruction = buildGlossaryInstruction(sourceLang, targetLang);
 
     return NextResponse.json({
       success: true,
@@ -81,8 +77,6 @@ export async function POST(req: NextRequest) {
         systemPrompt,
         wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
         expiresAt,
-        translateModel: 'gemini-3.5-live-translate-preview',
-        glossaryInstruction,
       },
     }, { headers: NO_CACHE });
   } catch (err) {

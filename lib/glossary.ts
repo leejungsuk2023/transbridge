@@ -205,41 +205,6 @@ ${glossaryLines}`;
 }
 
 /**
- * Builds a SHORT glossary instruction for a translation-only model (e.g. gemini-3.5-live-translate-preview).
- * Unlike buildSystemPrompt, this does NOT include the full role-lock text — the translate model
- * has translation built-in. This injects only the mandatory term mappings so the model uses
- * clinic-specific terminology consistently.
- */
-export function buildGlossaryInstruction(
-  sourceLang: string,
-  targetLang: string
-): string {
-  const roleLine =
-    'You are a professional medical interpreter for a dermatology/aesthetics clinic.';
-
-  const langPair = resolveLangPair(sourceLang, targetLang);
-  if (!langPair) return roleLine;
-
-  let entries: GlossaryEntry[] = [];
-  try {
-    entries = loadGlossary(langPair);
-  } catch (err) {
-    console.warn('[Glossary] Failed to load glossary for buildGlossaryInstruction:', (err as Error).message);
-    return roleLine;
-  }
-
-  const targetKey = langPair.split('-')[1] as keyof GlossaryEntry;
-  const glossaryLines = entries
-    .filter(e => e.ko && e[targetKey])
-    .map(e => `  ${e.ko} = ${e[targetKey]}`)
-    .join('\n');
-
-  if (!glossaryLines) return roleLine;
-
-  return `${roleLine}\nMandatory term mappings:\n${glossaryLines}`;
-}
-
-/**
  * Finds which glossary terms (in the target language) appear in the translated text.
  * Returns matched target-language term strings for frontend highlighting.
  */
