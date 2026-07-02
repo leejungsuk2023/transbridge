@@ -4,7 +4,7 @@
 
 ## v3 아키텍처 (Gemini Live API + Supabase)
 - 단일 안드로이드 디바이스 + 오픈핏 이어폰
-- Full-Duplex 상시 마이크 — PTT 버튼 없음, 항상 켜진 마이크로 자동 감지
+- Half-Duplex 마이크 — PTT 버튼 없음, 상시 캡처하되 TTS 재생 중엔 mute(에코 방지). 턴 기반(말하세요/통역 중 표시)
 - 프롬프터 UI (상하 분할: 환자 영역 / 직원 영역, Glossary 하이라이팅)
 - Gemini Live API 단일 통합 (STT + 번역 + TTS를 1개 WebSocket 연결로 처리)
 - @google/genai SDK — 클라이언트가 직접 Gemini Live WebSocket에 연결
@@ -26,7 +26,7 @@
   - 서버 사이드: translateWithGeminiLive (lib/gemini-live.ts, PTT 모드용 보조)
 - Audio: Web Audio API + AudioWorklet (PCM 16kHz) + AudioStreamer (PCM 24kHz 재생)
 
-## 핵심 흐름 (v3 Full-Duplex)
+## 핵심 흐름 (v3 Half-Duplex, 턴 기반)
 1. 대시보드에서 환자 언어 선택 → POST /api/session → /session/[id]?lang=xx 이동
 2. 세션 페이지 로드 시 GET /api/session?id=xxx 로 세션 유효성 검증
 3. POST /api/gemini-token (sourceLang=ko, targetLang={patientLang}) → ephemeral token + expiresAt
@@ -43,7 +43,7 @@
 - app/ : Next.js 페이지
   - app/page.tsx : 로그인 (Supabase Auth signInWithPassword)
   - app/dashboard/page.tsx : 대시보드 (11개 언어 선택, 세션 생성, Supabase 실시간 통계)
-  - app/session/[id]/page.tsx : 통역 세션 (Full-Duplex, AudioWorklet, 프롬프터)
+  - app/session/[id]/page.tsx : 통역 세션 (Half-Duplex, AudioWorklet, 프롬프터, 턴 표시)
   - app/error.tsx : 전역 React 에러 바운더리
   - app/session/[id]/error.tsx : 세션 전용 에러 바운더리
   - app/join/[id]/ : v1 잔존 코드 (미사용)
@@ -119,11 +119,14 @@ Vercel (서울 리전 icn1)
 - AudioWorklet: public/audio-processor.js, PCM Int16 → base64 → Gemini Live
 - AudioStreamer: PCM 24kHz 실시간 스케줄링 재생 (Google 공식 reference 구현 기반)
 - 언어 감지: /[\uac00-\ud7af]/.test(text) — 한글이면 직원, 아니면 환자 프롬프터
-- 동일 언어 에코 필터: ko→ko 또는 foreign→foreign 출력 억제
-- 스마트 인터럽트: 3자 이상 새 발화 감지 시 현재 TTS 재생 중단 (onInterrupt 콜백)
+- Half-Duplex 에코 방지: TTS 재생 중 마이크 mute (isPlayingAudioRef) — 열린 스피커 자기 TTS 재입력 방지. (동일언어 에코 텍스트 필터는 제거됨: 조각난 inputTranscription의 끝 조각이 언어판정을 뒤집어 멀쩡한 번역을 삭제하던 버그)
+- 턴 표시 UI: 🟢 말하세요 / 🔴 통역 중 / 연결 중 (isPlayingAudioRef → ttsPlaying state 미러링)
+- 마이크 재개 3중 안전장치: onComplete + onInterrupt + rolling 워치독 1.5초(마지막 오디오 청크 후) + 마이크 AudioContext keep-alive(2초 주기 resume, 모바일 대비)
+- VAD: silenceDurationMs 1000, start/endOfSpeechSensitivity LOW, prefixPaddingMs 300 (lib/gemini-client.ts)
+- 웹 barge-in 불가: 열린 스피커에선 브라우저가 사용자 음성/TTS 에코 구분 못 함(OS AEC 없음) → 진짜 끼어들기는 네이티브 앱 필요
 - WebSocket 자동 재연결: 지수 백오프 (1s → 2s → 4s → 8s → 16s, 최대 5회)
 - 토큰 proactive 갱신: expiresAt 기준 1분 전 자동 재발급 (30초 주기 체크)
-- Zombie 세션 정리: sendBeacon(beforeunload/visibilitychange) + list API 2시간 stale 정리
+- Zombie 세션 정리: Vercel Cron(/api/cron/cleanup-sessions, 시간당, 1시간↑ active 전역 종료) + sendBeacon + list API 2시간 stale 정리
 - 에러 바운더리: app/error.tsx (전역) + app/session/[id]/error.tsx (세션 전용)
 - 오프라인 오버레이: OfflineOverlay.tsx — window online/offline 이벤트 감지
 - fetchWithRetry: lib/fetch-with-retry.ts — 3회 재시도, 10초 타임아웃, 5xx만 재시도
