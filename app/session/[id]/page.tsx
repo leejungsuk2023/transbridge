@@ -304,8 +304,6 @@ export default function SessionPage() {
         audioStreamerRef.current = streamer;
         // Unmute mic when TTS playback finishes
         streamer.onComplete = () => {
-          // [DEBUG] log TTS end + the MIC AudioContext state (suspected mobile suspend)
-          logError({ errorType: 'dbg_play', errorMessage: 'end micctx=' + (audioContextRef.current?.state ?? 'null'), sessionId, patientLang });
           // Mobile browsers can suspend the mic AudioContext during/after playback,
           // silently killing capture after a few turns. Revive it here.
           if (audioContextRef.current?.state === 'suspended') {
@@ -329,8 +327,6 @@ export default function SessionPage() {
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
-            // [DEBUG] capture EVERY input transcription (before the playing guard)
-            logError({ errorType: 'dbg_in', errorMessage: (text || '').slice(0, 40), sessionId, patientLang, context: { ko: /[가-힯]/.test(text), playing: isPlayingAudioRef.current } });
             // ECHO FILTER: ignore inputTranscription that arrives while TTS is playing
             if (isPlayingAudioRef.current) return;
 
@@ -361,8 +357,6 @@ export default function SessionPage() {
           onTranslatedText: (text) => {
             const isKorean = /[\uac00-\ud7af]/.test(text);
             const lastInputKorean = lastInputWasKoreanRef.current;
-            // [DEBUG] capture EVERY output transcription + the suppression decision
-            logError({ errorType: 'dbg_out', errorMessage: (text || '').slice(0, 40), sessionId, patientLang, context: { ko: isKorean, lastKo: lastInputKorean, suppress: (!lastInputKorean && !isKorean) } });
 
             // NOTE: same-language echo suppression REMOVED entirely. It relied on
             // lastInputWasKorean, which is derived from inputTranscription that
@@ -391,8 +385,6 @@ export default function SessionPage() {
             }
           },
           onAudio: (data: ArrayBuffer) => {
-            // [DEBUG] log the transition into TTS playback
-            if (!isPlayingAudioRef.current) logError({ errorType: 'dbg_play', errorMessage: 'start', sessionId, patientLang });
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
             setTtsPlaying(true);
@@ -510,7 +502,6 @@ export default function SessionPage() {
         micKeepAliveRef.current = setInterval(() => {
           const ctx = audioContextRef.current;
           if (ctx && ctx.state === "suspended") {
-            logError({ errorType: 'dbg_play', errorMessage: 'micctx-resume', sessionId, patientLang });
             ctx.resume().catch(() => {});
           }
         }, 2000);

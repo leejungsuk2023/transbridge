@@ -15,9 +15,6 @@ type ErrorType =
   | 'audio_worklet'         // AudioWorklet load/init failure
   | 'token_fetch'           // /api/gemini-token failed
   | 'session_fetch'         // /api/session failed
-  | 'dbg_in'                // [DEBUG-TEMP] input transcription trace
-  | 'dbg_out'               // [DEBUG-TEMP] output transcription + suppression trace
-  | 'dbg_play'             // [DEBUG-TEMP] TTS playback start/end trace
   | 'unknown';
 
 export interface LogErrorParams {

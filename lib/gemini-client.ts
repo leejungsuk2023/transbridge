@@ -128,15 +128,14 @@ export class GeminiLiveSession {
       temperature: 0.2,
       topP: 0.3,
       topK: 5,
-      // VAD tuning for medical interpretation — speakers (especially patients
-      // in a foreign language) frequently pause mid-sentence. Defaults are too
-      // eager and cut speakers off; require 1.8s of silence before committing
-      // end-of-turn so natural pauses don't trigger premature translation.
+      // VAD tuning for medical interpretation — speakers pause mid-sentence, so
+      // we don't want to cut them off, but 1.8s felt sluggish in practice. 1.0s
+      // is a balance: snappy end-of-turn while still tolerating short pauses.
       realtimeInputConfig: {
         automaticActivityDetection: {
           startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
           endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
-          silenceDurationMs: 1800,
+          silenceDurationMs: 1000,
           prefixPaddingMs: 300,
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
