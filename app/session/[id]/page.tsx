@@ -189,6 +189,7 @@ export default function SessionPage() {
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
   const [reconnectExhausted, setReconnectExhausted] = useState(false);
+  const [ttsPlaying, setTtsPlaying] = useState(false); // mirrors isPlayingAudioRef for the UI turn indicator
   // Network online/offline state (displayed via OfflineOverlay in layout)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isOnline, setIsOnline] = useState(true);
@@ -303,6 +304,7 @@ export default function SessionPage() {
         // Unmute mic when TTS playback finishes
         streamer.onComplete = () => {
           isPlayingAudioRef.current = false;
+          setTtsPlaying(false);
           if (playbackWatchdogRef.current) {
             clearTimeout(playbackWatchdogRef.current);
             playbackWatchdogRef.current = null;
@@ -382,12 +384,14 @@ export default function SessionPage() {
           onAudio: (data: ArrayBuffer) => {
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
+            setTtsPlaying(true);
             // Watchdog: guarantee the mic is never left muted forever if onComplete
             // and stop() both somehow fail to fire. TTS for one turn is always well
             // under 15s, so this only ever triggers on a genuine stuck state.
             if (playbackWatchdogRef.current) clearTimeout(playbackWatchdogRef.current);
             playbackWatchdogRef.current = setTimeout(() => {
               isPlayingAudioRef.current = false;
+              setTtsPlaying(false);
               playbackWatchdogRef.current = null;
               audioStreamerRef.current?.stop();
             }, 15000);
@@ -412,6 +416,7 @@ export default function SessionPage() {
             // for immediacy. This is the path that used to freeze the app.
             audioStreamerRef.current?.stop();
             isPlayingAudioRef.current = false;
+            setTtsPlaying(false);
             if (playbackWatchdogRef.current) {
               clearTimeout(playbackWatchdogRef.current);
               playbackWatchdogRef.current = null;
@@ -687,8 +692,22 @@ export default function SessionPage() {
         />
       </div>
 
-      {/* Divider */}
-      <div className="flex-none h-px bg-gray-700 mx-4" />
+      {/* Turn indicator — tells the user when the mic is listening (half-duplex) */}
+      <div className="flex-none flex items-center justify-center py-2 bg-gray-950 border-y border-gray-800">
+        {connectionState !== "connected" ? (
+          <span className="px-5 py-2 rounded-full text-base font-bold bg-gray-800 text-gray-300">
+            {connectionState === "reconnecting" ? "재연결 중…" : "연결 중…"}
+          </span>
+        ) : ttsPlaying ? (
+          <span className="px-5 py-2 rounded-full text-base font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+            🔴 통역 중 · 잠시만요
+          </span>
+        ) : (
+          <span className="px-6 py-2 rounded-full text-lg font-extrabold bg-green-500/20 text-green-300 border border-green-500/50 animate-pulse">
+            🟢 말하세요
+          </span>
+        )}
+      </div>
 
       {/* Staff area (bottom half) */}
       <div className="flex-1 flex flex-col min-h-0 p-3">
