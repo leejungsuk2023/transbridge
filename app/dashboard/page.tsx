@@ -208,19 +208,24 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="relative min-h-screen bg-gradient-to-br from-sky-100 via-indigo-100 to-fuchsia-100 overflow-x-hidden">
+      {/* Decorative blobs */}
+      <div className="absolute -top-24 -left-24 w-80 h-80 rounded-full bg-blue-400/20 blur-3xl pointer-events-none" />
+      <div className="absolute top-1/2 -right-24 w-96 h-96 rounded-full bg-fuchsia-400/15 blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-24 left-1/3 w-72 h-72 rounded-full bg-indigo-400/20 blur-3xl pointer-events-none" />
+
       {/* Header */}
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+      <header className="bg-white/70 backdrop-blur-xl border-b border-white/60 shadow-sm sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img src="/logo.png" alt="TransBridge" className="w-28 h-auto" />
             <div>
-              <p className="text-xs text-gray-500">{hospitalName || "병원"}</p>
+              <p className="text-xs font-medium text-indigo-500">{hospitalName || "병원"}</p>
             </div>
           </div>
           <button
             onClick={handleLogout}
-            className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1.5"
+            className="text-sm text-gray-500 hover:text-fuchsia-600 flex items-center gap-1.5 transition hover:-translate-y-0.5"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -231,11 +236,13 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <div className="relative max-w-4xl mx-auto px-4 py-6 space-y-6">
         {/* New session CTA */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+        <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-6 space-y-5">
           <div>
-            <h2 className="text-lg font-semibold text-gray-800 mb-1">새 통역 시작</h2>
+            <h2 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-fuchsia-600 bg-clip-text text-transparent mb-1">
+              새 통역 시작
+            </h2>
             <p className="text-sm text-gray-500">환자 언어를 선택한 후 통역을 시작하세요</p>
           </div>
 
@@ -246,17 +253,21 @@ export default function DashboardPage() {
                 key={lang.code}
                 onClick={() => setSelectedLang(lang.code)}
                 className={`
-                  flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition
+                  flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition hover:-translate-y-0.5
                   ${selectedLang === lang.code
-                    ? "border-blue-500 bg-blue-50 text-blue-700"
-                    : "border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50"
+                    ? "border-transparent bg-gradient-to-br from-blue-600 to-fuchsia-600 text-white shadow-lg shadow-blue-500/30 ring-2 ring-blue-400/40"
+                    : "border-white/60 bg-white/60 backdrop-blur-sm text-gray-700 hover:border-indigo-300/60 hover:bg-white/80 hover:shadow-md hover:shadow-indigo-200/40"
                   }
                 `}
               >
                 <span className="text-3xl">{lang.flag}</span>
                 <div className="text-center">
-                  <p className="font-semibold text-sm">{lang.korean}</p>
-                  <p className="text-xs text-gray-500">{lang.native}</p>
+                  <p className={`font-semibold text-sm ${selectedLang === lang.code ? "text-white" : "text-gray-800"}`}>
+                    {lang.korean}
+                  </p>
+                  <p className={`text-xs ${selectedLang === lang.code ? "text-white/80" : "text-gray-500"}`}>
+                    {lang.native}
+                  </p>
                 </div>
               </button>
             ))}
@@ -266,7 +277,7 @@ export default function DashboardPage() {
           <button
             onClick={handleNewSession}
             disabled={!selectedLang || starting}
-            className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-lg py-4 rounded-2xl transition shadow-md hover:shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full bg-gradient-to-r from-blue-600 to-fuchsia-600 hover:from-blue-500 hover:to-fuchsia-500 active:brightness-95 text-white font-bold text-lg py-4 rounded-2xl transition shadow-lg shadow-blue-500/30 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-blue-500/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-md"
           >
             {starting ? (
               <span className="flex items-center justify-center gap-2">
@@ -284,14 +295,14 @@ export default function DashboardPage() {
 
         {/* Stats cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-white rounded-xl border border-gray-100 p-4">
+          <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
             <p className="text-xs text-gray-500 mb-1">이번달 통역</p>
             <p className="text-2xl font-bold text-gray-900">
               {loading || loadError ? "—" : stats.total}
               {!loading && !loadError && <span className="text-sm font-normal text-gray-500 ml-1">건</span>}
             </p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-100 p-4">
+          <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
             <p className="text-xs text-gray-500 mb-1">총 사용시간</p>
             <p className="text-xl font-bold text-gray-900">
               {loading || loadError ? (
@@ -314,11 +325,11 @@ export default function DashboardPage() {
           {/* Top 2 languages by session count this month */}
           {loading || loadError ? (
             <>
-              <div className="bg-white rounded-xl border border-gray-100 p-4">
+              <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
                 <p className="text-xs text-gray-500 mb-1">—</p>
                 <p className="text-2xl font-bold text-gray-400">—</p>
               </div>
-              <div className="bg-white rounded-xl border border-gray-100 p-4">
+              <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
                 <p className="text-xs text-gray-500 mb-1">—</p>
                 <p className="text-2xl font-bold text-gray-400">—</p>
               </div>
@@ -330,9 +341,12 @@ export default function DashboardPage() {
                 .slice(0, 2);
               // Pad to always render 2 cards
               while (topLangs.length < 2) topLangs.push(["", 0]);
-              const colors = ["text-blue-600", "text-green-600"];
+              const colors = [
+                "bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent",
+                "bg-gradient-to-r from-fuchsia-500 to-purple-500 bg-clip-text text-transparent",
+              ];
               return topLangs.map(([code, count], i) => (
-                <div key={code || `empty-${i}`} className="bg-white rounded-xl border border-gray-100 p-4">
+                <div key={code || `empty-${i}`} className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
                   <p className="text-xs text-gray-500 mb-1">
                     {code ? (LANG_MAP[code]?.name ?? code) : "—"}
                   </p>
@@ -347,9 +361,11 @@ export default function DashboardPage() {
         </div>
 
         {/* Recent sessions table */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-50">
-            <h2 className="font-semibold text-gray-900">최근 통역 내역</h2>
+        <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/60">
+            <h2 className="font-bold bg-gradient-to-r from-blue-600 to-fuchsia-600 bg-clip-text text-transparent">
+              최근 통역 내역
+            </h2>
           </div>
           <div className="overflow-x-auto">
             {loading ? (
@@ -359,7 +375,7 @@ export default function DashboardPage() {
                 <p className="text-sm text-gray-500 mb-3">데이터를 불러올 수 없습니다</p>
                 <button
                   onClick={() => setFetchTick((t) => t + 1)}
-                  className="text-sm text-blue-600 hover:text-blue-800 font-medium underline underline-offset-2 transition"
+                  className="text-sm font-medium bg-gradient-to-r from-blue-600 to-fuchsia-600 bg-clip-text text-transparent underline underline-offset-2 transition"
                 >
                   다시 불러오기
                 </button>
@@ -369,14 +385,14 @@ export default function DashboardPage() {
             ) : (
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-gray-50">
-                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
-                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">언어</th>
-                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
-                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                  <tr className="bg-gradient-to-r from-indigo-50/60 to-fuchsia-50/60">
+                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">날짜</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">언어</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">시간</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">상태</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-indigo-50/60">
                   {sessions.map((session) => {
                     const langInfo = LANG_MAP[session.patientLang] ?? { flag: "🌐", name: session.patientLang ?? "—" };
                     // A session is only considered "진행중" if status is not ended AND it started within the last 2 hours.
@@ -384,10 +400,10 @@ export default function DashboardPage() {
                     const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
                     const isActive = session.status !== "ended" && new Date(session.startedAt).getTime() > twoHoursAgo;
                     return (
-                      <tr key={session.id} className="hover:bg-gray-50 transition">
+                      <tr key={session.id} className="hover:bg-indigo-50/30 transition">
                         <td className="px-5 py-3.5 text-gray-600">{formatDate(session.startedAt)}</td>
                         <td className="px-5 py-3.5">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 border border-blue-100/60">
                             {langInfo.flag} {langInfo.name}
                           </span>
                         </td>
@@ -395,10 +411,10 @@ export default function DashboardPage() {
                           {session.durationSec != null ? formatDuration(session.durationSec) : "—"}
                         </td>
                         <td className="px-5 py-3.5">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
                             isActive
-                              ? "bg-green-50 text-green-700"
-                              : "bg-gray-100 text-gray-600"
+                              ? "bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 border border-emerald-100/60"
+                              : "bg-gray-100/80 text-gray-500 border border-gray-200/60"
                           }`}>
                             {isActive ? "진행중" : "완료"}
                           </span>
