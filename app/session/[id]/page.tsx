@@ -303,6 +303,8 @@ export default function SessionPage() {
         audioStreamerRef.current = streamer;
         // Unmute mic when TTS playback finishes
         streamer.onComplete = () => {
+          // [DEBUG] log TTS playback finished → mic reopens
+          logError({ errorType: 'dbg_play', errorMessage: 'end', sessionId, patientLang });
           isPlayingAudioRef.current = false;
           setTtsPlaying(false);
           if (playbackWatchdogRef.current) {
@@ -321,6 +323,8 @@ export default function SessionPage() {
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
+            // [DEBUG] capture EVERY input transcription (before the playing guard)
+            logError({ errorType: 'dbg_in', errorMessage: (text || '').slice(0, 40), sessionId, patientLang, context: { ko: /[가-힯]/.test(text), playing: isPlayingAudioRef.current } });
             // ECHO FILTER: ignore inputTranscription that arrives while TTS is playing
             if (isPlayingAudioRef.current) return;
 
@@ -351,6 +355,8 @@ export default function SessionPage() {
           onTranslatedText: (text) => {
             const isKorean = /[\uac00-\ud7af]/.test(text);
             const lastInputKorean = lastInputWasKoreanRef.current;
+            // [DEBUG] capture EVERY output transcription + the suppression decision
+            logError({ errorType: 'dbg_out', errorMessage: (text || '').slice(0, 40), sessionId, patientLang, context: { ko: isKorean, lastKo: lastInputKorean, suppress: (!lastInputKorean && !isKorean) } });
 
             // FILTER: suppress same-language echo.
             // NOTE: We intentionally NO LONGER suppress ko→ko here. Korean output
@@ -382,6 +388,8 @@ export default function SessionPage() {
             }
           },
           onAudio: (data: ArrayBuffer) => {
+            // [DEBUG] log the transition into TTS playback
+            if (!isPlayingAudioRef.current) logError({ errorType: 'dbg_play', errorMessage: 'start', sessionId, patientLang });
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
             setTtsPlaying(true);
