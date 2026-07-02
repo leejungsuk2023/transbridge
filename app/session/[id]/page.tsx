@@ -358,19 +358,16 @@ export default function SessionPage() {
             // [DEBUG] capture EVERY output transcription + the suppression decision
             logError({ errorType: 'dbg_out', errorMessage: (text || '').slice(0, 40), sessionId, patientLang, context: { ko: isKorean, lastKo: lastInputKorean, suppress: (!lastInputKorean && !isKorean) } });
 
-            // FILTER: suppress same-language echo.
-            // NOTE: We intentionally NO LONGER suppress ko→ko here. Korean output
-            // almost always means foreign speech was translated to Korean — exactly
-            // what we must show. The old ko→ko guard ate legitimate Korean
-            // translations whenever input-language tracking went stale (common when
-            // Thai STT misses the patient's speech), producing the "Korean never
-            // appears" symptom. The audio-feedback echo loop is already prevented
-            // upstream by the mic-mute during TTS (isPlayingAudioRef), so this
-            // guard was redundant.
-            if (!lastInputKorean && !isKorean) {
-              console.log("[Filter] Suppressed foreign→foreign echo:", text.slice(0, 30));
-              return;
-            }
+            // NOTE: same-language echo suppression REMOVED entirely. It relied on
+            // lastInputWasKorean, which is derived from inputTranscription that
+            // arrives in fragments — the trailing fragment (often just "." ) flipped
+            // the language flag and made the filter DELETE legitimate translations
+            // (confirmed via debug logs: KO→EN output "Hello, where does it hurt?"
+            // was suppressed because the last input fragment was punctuation).
+            // Half-duplex mic-mute during TTS already prevents the audio echo loop,
+            // so the text filter was both redundant and harmful. Route purely by
+            // the OUTPUT language below.
+            void lastInputKorean;
 
             // Accumulate translated text
             if (isKorean) {
@@ -393,16 +390,17 @@ export default function SessionPage() {
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
             setTtsPlaying(true);
-            // Watchdog: guarantee the mic is never left muted forever if onComplete
-            // and stop() both somehow fail to fire. TTS for one turn is always well
-            // under 15s, so this only ever triggers on a genuine stuck state.
+            // Rolling reset: re-armed on every audio chunk, so it fires ~1.5s after
+            // the LAST chunk (shortly after TTS actually stops). Reliably re-opens
+            // the mic instead of the old 15s watchdog that kept the mic muted for
+            // many seconds and dropped the patient's reply (confirmed via logs).
             if (playbackWatchdogRef.current) clearTimeout(playbackWatchdogRef.current);
             playbackWatchdogRef.current = setTimeout(() => {
               isPlayingAudioRef.current = false;
               setTtsPlaying(false);
               playbackWatchdogRef.current = null;
               audioStreamerRef.current?.stop();
-            }, 15000);
+            }, 1500);
             // Ensure AudioContext is active (Chrome autoplay policy may suspend it)
             if (streamer.context.state === "suspended") {
               streamer.context.resume().catch((err: unknown) => {
