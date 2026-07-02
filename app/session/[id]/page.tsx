@@ -203,6 +203,7 @@ export default function SessionPage() {
   const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo
   const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-unmute safety net
   const micKeepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null); // Keeps mic AudioContext alive on mobile
+  const unmuteGuardRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Delays mic reopen past the TTS echo tail
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   // Token expiry timestamp (ms since epoch) from /api/gemini-token
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -309,12 +310,21 @@ export default function SessionPage() {
           if (audioContextRef.current?.state === 'suspended') {
             audioContextRef.current.resume().catch(() => {});
           }
-          isPlayingAudioRef.current = false;
-          setTtsPlaying(false);
           if (playbackWatchdogRef.current) {
             clearTimeout(playbackWatchdogRef.current);
             playbackWatchdogRef.current = null;
           }
+          // Echo guard-band: keep the mic muted ~0.8s AFTER playback ends so the
+          // acoustic tail/reverb of our own TTS (open speaker) isn't picked up as
+          // speech and re-translated — which caused overlapping "two voices" once
+          // start-sensitivity was raised to HIGH. If new audio arrives (next turn),
+          // onAudio cancels this timer.
+          if (unmuteGuardRef.current) clearTimeout(unmuteGuardRef.current);
+          unmuteGuardRef.current = setTimeout(() => {
+            isPlayingAudioRef.current = false;
+            setTtsPlaying(false);
+            unmuteGuardRef.current = null;
+          }, 800);
         };
         try {
           await streamer.resume();
@@ -385,6 +395,11 @@ export default function SessionPage() {
             }
           },
           onAudio: (data: ArrayBuffer) => {
+            // New audio playing → cancel any pending echo guard-band unmute.
+            if (unmuteGuardRef.current) {
+              clearTimeout(unmuteGuardRef.current);
+              unmuteGuardRef.current = null;
+            }
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
             setTtsPlaying(true);
@@ -426,6 +441,10 @@ export default function SessionPage() {
             if (playbackWatchdogRef.current) {
               clearTimeout(playbackWatchdogRef.current);
               playbackWatchdogRef.current = null;
+            }
+            if (unmuteGuardRef.current) {
+              clearTimeout(unmuteGuardRef.current);
+              unmuteGuardRef.current = null;
             }
           },
           onError: (err) => setError(err),
@@ -526,6 +545,10 @@ export default function SessionPage() {
       if (micKeepAliveRef.current) {
         clearInterval(micKeepAliveRef.current);
         micKeepAliveRef.current = null;
+      }
+      if (unmuteGuardRef.current) {
+        clearTimeout(unmuteGuardRef.current);
+        unmuteGuardRef.current = null;
       }
       workletNodeRef.current?.disconnect();
       audioContextRef.current?.close();
