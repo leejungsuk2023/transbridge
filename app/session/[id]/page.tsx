@@ -388,17 +388,19 @@ export default function SessionPage() {
             // Mute mic input while playing TTS to prevent echo feedback loop
             isPlayingAudioRef.current = true;
             setTtsPlaying(true);
-            // Rolling reset: re-armed on every audio chunk, so it fires ~1.5s after
-            // the LAST chunk (shortly after TTS actually stops). Reliably re-opens
-            // the mic instead of the old 15s watchdog that kept the mic muted for
-            // many seconds and dropped the patient's reply (confirmed via logs).
+            // Safety backstop only. The REAL unmute signal is streamer.onComplete
+            // (fires when playback actually finishes). This watchdog just guards
+            // against isPlayingAudioRef getting stuck if onComplete never fires.
+            // It must NOT call stop(): audio chunks arrive faster than realtime, so
+            // firing shortly after the last chunk would cut off TTS mid-sentence
+            // (text shows fully, audio truncates). Generous timeout + flag-reset
+            // only, so it never interrupts normal playback.
             if (playbackWatchdogRef.current) clearTimeout(playbackWatchdogRef.current);
             playbackWatchdogRef.current = setTimeout(() => {
               isPlayingAudioRef.current = false;
               setTtsPlaying(false);
               playbackWatchdogRef.current = null;
-              audioStreamerRef.current?.stop();
-            }, 1500);
+            }, 8000);
             // Ensure AudioContext is active (Chrome autoplay policy may suspend it)
             if (streamer.context.state === "suspended") {
               streamer.context.resume().catch((err: unknown) => {

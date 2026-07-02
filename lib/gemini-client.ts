@@ -133,7 +133,7 @@ export class GeminiLiveSession {
       // is a balance: snappy end-of-turn while still tolerating short pauses.
       realtimeInputConfig: {
         automaticActivityDetection: {
-          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
+          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
           endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
           silenceDurationMs: 1000,
           prefixPaddingMs: 300,
