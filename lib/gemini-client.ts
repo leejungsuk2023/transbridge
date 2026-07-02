@@ -396,6 +396,14 @@ export class GeminiLiveSession {
       if (serverContent.turnComplete) {
         this.isOutputPlaying = false;
         this.pendingTranscriptLength = 0;
+        // Reset the model's conversation CONTEXT after every completed turn. The native
+        // model accumulates context and, for weaker languages (Vietnamese/Thai),
+        // starts echoing the input instead of translating after a couple of turns.
+        // A fresh session context translates reliably every time. We reuse the
+        // handover mechanism (pre-open a fresh session + atomic swap). This runs while
+        // half-duplex has the mic muted during TTS playback, so the swap completes
+        // before the next speaker talks — seamless, no gap.
+        this._handleGoAway().catch(() => {});
       }
     }
   }
