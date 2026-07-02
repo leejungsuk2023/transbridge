@@ -202,6 +202,7 @@ export default function SessionPage() {
   const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
   const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo
   const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-unmute safety net
+  const micKeepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null); // Keeps mic AudioContext alive on mobile
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   // Token expiry timestamp (ms since epoch) from /api/gemini-token
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -303,8 +304,13 @@ export default function SessionPage() {
         audioStreamerRef.current = streamer;
         // Unmute mic when TTS playback finishes
         streamer.onComplete = () => {
-          // [DEBUG] log TTS playback finished → mic reopens
-          logError({ errorType: 'dbg_play', errorMessage: 'end', sessionId, patientLang });
+          // [DEBUG] log TTS end + the MIC AudioContext state (suspected mobile suspend)
+          logError({ errorType: 'dbg_play', errorMessage: 'end micctx=' + (audioContextRef.current?.state ?? 'null'), sessionId, patientLang });
+          // Mobile browsers can suspend the mic AudioContext during/after playback,
+          // silently killing capture after a few turns. Revive it here.
+          if (audioContextRef.current?.state === 'suspended') {
+            audioContextRef.current.resume().catch(() => {});
+          }
           isPlayingAudioRef.current = false;
           setTtsPlaying(false);
           if (playbackWatchdogRef.current) {
@@ -497,6 +503,17 @@ export default function SessionPage() {
 
         // Connect: mic source → worklet (do NOT connect to destination to avoid echo)
         source.connect(workletNode);
+
+        // Keep the mic AudioContext alive. Mobile browsers suspend it after audio
+        // playback / focus changes, which silently kills mic capture after a few
+        // turns (observed: dbg_in stops firing). Poll and resume it.
+        micKeepAliveRef.current = setInterval(() => {
+          const ctx = audioContextRef.current;
+          if (ctx && ctx.state === "suspended") {
+            logError({ errorType: 'dbg_play', errorMessage: 'micctx-resume', sessionId, patientLang });
+            ctx.resume().catch(() => {});
+          }
+        }, 2000);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "연결에 실패했습니다.");
@@ -512,6 +529,10 @@ export default function SessionPage() {
       if (playbackWatchdogRef.current) {
         clearTimeout(playbackWatchdogRef.current);
         playbackWatchdogRef.current = null;
+      }
+      if (micKeepAliveRef.current) {
+        clearInterval(micKeepAliveRef.current);
+        micKeepAliveRef.current = null;
       }
       workletNodeRef.current?.disconnect();
       audioContextRef.current?.close();
