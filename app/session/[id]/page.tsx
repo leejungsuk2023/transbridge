@@ -174,6 +174,31 @@ interface PrompterState {
 const EMPTY_PROMPTER: PrompterState = { text: "", glossaryTerms: [], speaker: "staff" };
 
 // ---------------------------------------------------------------------------
+// Hybrid barge-in tuning constants
+// These may need on-device adjustment depending on speaker volume and room acoustics.
+// ---------------------------------------------------------------------------
+/** User voice must be this many times louder than the measured TTS echo to confirm barge-in. */
+const BARGE_RMS_MULTIPLIER = 2.5;
+/** Absolute RMS floor (Int16 scale) — prevents near-silence from ever triggering barge-in. */
+const BARGE_FLOOR_RMS = 900;
+/** Number of consecutive above-threshold chunks required before committing to barge-in (~chunk cadence). */
+const BARGE_SUSTAIN_CHUNKS = 3;
+/** Exponential moving-average alpha for echo baseline smoothing (lower = slower adaptation). */
+const ECHO_EMA_ALPHA = 0.15;
+
+/**
+ * Compute the root-mean-square energy of a raw Int16 PCM ArrayBuffer.
+ * Returns 0 for an empty buffer.
+ */
+function rmsOfInt16(buf: ArrayBuffer): number {
+  const s = new Int16Array(buf);
+  if (!s.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < s.length; i++) sum += s[i] * s[i];
+  return Math.sqrt(sum / s.length);
+}
+
+// ---------------------------------------------------------------------------
 // SessionPage component
 // ---------------------------------------------------------------------------
 export default function SessionPage() {
@@ -199,9 +224,12 @@ export default function SessionPage() {
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
-  const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo
-  const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-unmute safety net
+  const isPlayingAudioRef = useRef(false); // True while TTS audio is playing
+  const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-reset safety net
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // Hybrid barge-in state — rolling echo baseline + consecutive-loud-chunk counter
+  const echoBaselineRef = useRef(0);   // rolling RMS of TTS echo while playing
+  const bargeCountRef = useRef(0);     // consecutive loud chunks during TTS
   // Token expiry timestamp (ms since epoch) from /api/gemini-token
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const tokenExpiresAtRef = useRef<number | null>(null);
@@ -300,13 +328,16 @@ export default function SessionPage() {
         // 3. Create AudioStreamer for playback (reference audio-streamer.ts)
         const streamer = new AudioStreamer(new AudioContext({ sampleRate: 24000 }));
         audioStreamerRef.current = streamer;
-        // Unmute mic when TTS playback finishes
+        // Reset playing state + barge-in accumulators when TTS playback finishes
         streamer.onComplete = () => {
           isPlayingAudioRef.current = false;
           if (playbackWatchdogRef.current) {
             clearTimeout(playbackWatchdogRef.current);
             playbackWatchdogRef.current = null;
           }
+          // Recalibrate barge-in for the next TTS turn
+          echoBaselineRef.current = 0;
+          bargeCountRef.current = 0;
         };
         try {
           await streamer.resume();
@@ -416,6 +447,9 @@ export default function SessionPage() {
               clearTimeout(playbackWatchdogRef.current);
               playbackWatchdogRef.current = null;
             }
+            // Recalibrate barge-in for the next TTS turn
+            echoBaselineRef.current = 0;
+            bargeCountRef.current = 0;
           },
           onError: (err) => setError(err),
           onStateChange: (state) => {
@@ -464,24 +498,73 @@ export default function SessionPage() {
         const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
         workletNodeRef.current = workletNode;
 
+        // ---------------------------------------------------------------------------
+        // HYBRID BARGE-IN: mic stays open during TTS playback, but an RMS energy
+        // gate suppresses the TTS echo from reaching Gemini while still letting
+        // a clearly-louder user voice interrupt (stop TTS + start sending).
+        //
+        // How it works:
+        //  • While TTS is NOT playing: send every chunk normally (pure listening).
+        //  • While TTS IS playing: measure the mic RMS on each chunk.
+        //    - Build a rolling EMA baseline of the echo level.
+        //    - If the chunk is below BARGE_RMS_MULTIPLIER × baseline (and below
+        //      the absolute BARGE_FLOOR_RMS), it's just echo — suppress it.
+        //    - If it exceeds the threshold for BARGE_SUSTAIN_CHUNKS consecutive
+        //      chunks, the user is genuinely speaking → stop TTS, reset state,
+        //      and send the chunk.
+        //
+        // BARGE_RMS_MULTIPLIER and BARGE_FLOOR_RMS may need on-device tuning
+        // depending on speaker volume and room acoustics.
+        // ---------------------------------------------------------------------------
         workletNode.port.onmessage = (e: MessageEvent) => {
           const int16Buffer: ArrayBuffer = e.data?.data?.int16arrayBuffer;
           if (!int16Buffer) return;
 
-          // HALF-DUPLEX ECHO PREVENTION: do not send mic audio while TTS is
-          // playing. On an open phone speaker (the common setup — users rarely
-          // wear earphones) browser echoCancellation cannot remove our own TTS,
-          // so an open mic re-feeds the Korean TTS back to Gemini and it gets
-          // mis-transcribed as the patient's language. Muting during playback is
-          // the only reliable fix on web. The freeze this used to cause is now
-          // prevented by the playback watchdog + stop()->onComplete (see below).
-          if (isPlayingAudioRef.current) return;
-
-          // Convert to base64 and send — matches arrayBufferToBase64 in reference
+          const rms = rmsOfInt16(int16Buffer);
           const base64 = arrayBufferToBase64(int16Buffer);
-          session.sendAudio(base64);
 
-          // Audio chunk sent to Gemini
+          if (!isPlayingAudioRef.current) {
+            // Normal listening — not during TTS. Reset barge state and send.
+            bargeCountRef.current = 0;
+            echoBaselineRef.current = 0;
+            session.sendAudio(base64);
+            return;
+          }
+
+          // TTS is playing — decide: echo suppression or barge-in?
+
+          // Seed the baseline on the very first chunk of each TTS turn.
+          if (echoBaselineRef.current === 0) echoBaselineRef.current = rms;
+
+          const threshold = Math.max(
+            echoBaselineRef.current * BARGE_RMS_MULTIPLIER,
+            BARGE_FLOOR_RMS
+          );
+
+          if (rms > threshold) {
+            bargeCountRef.current += 1;
+
+            if (bargeCountRef.current >= BARGE_SUSTAIN_CHUNKS) {
+              // CONFIRMED BARGE-IN: user is clearly speaking over the TTS.
+              audioStreamerRef.current?.stop(); // also triggers onComplete → resets isPlayingAudioRef
+              isPlayingAudioRef.current = false;
+              if (playbackWatchdogRef.current) {
+                clearTimeout(playbackWatchdogRef.current);
+                playbackWatchdogRef.current = null;
+              }
+              echoBaselineRef.current = 0;
+              bargeCountRef.current = 0;
+              session.sendAudio(base64); // send the barge-in chunk that triggered the cutoff
+            }
+            // If not yet at sustain count, hold off — don't send yet.
+            return;
+          }
+
+          // Below threshold — this is echo, not speech. Suppress and update baseline.
+          bargeCountRef.current = 0;
+          echoBaselineRef.current =
+            echoBaselineRef.current * (1 - ECHO_EMA_ALPHA) + rms * ECHO_EMA_ALPHA;
+          // Do not send — suppress the echo chunk.
         };
 
         // Connect: mic source → worklet (do NOT connect to destination to avoid echo)
