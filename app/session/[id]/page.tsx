@@ -10,6 +10,8 @@ import {
   arrayBufferToBase64,
 } from "@/lib/gemini-client";
 import { logError } from "@/lib/error-logger";
+import { NativeAudio, isNativeApp } from "@/lib/native-audio";
+import type { PluginListenerHandle } from "@capacitor/core";
 
 // ---------------------------------------------------------------------------
 // Session timer hook
@@ -193,6 +195,12 @@ export default function SessionPage() {
   // Network online/offline state (displayed via OfflineOverlay in layout)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isOnline, setIsOnline] = useState(true);
+  // Whether we're running inside the Capacitor native shell (full-duplex, hardware AEC)
+  // vs a normal browser (half-duplex). Set in an effect (not a lazy initializer) so the
+  // first client render matches the SSR output and React doesn't report a hydration
+  // mismatch on the APP badge / turn-indicator text.
+  const [isNative, setIsNative] = useState(false);
+  useEffect(() => { setIsNative(isNativeApp()); }, []);
 
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
@@ -200,11 +208,14 @@ export default function SessionPage() {
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
-  const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo
+  const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo (web only; stays false in native)
   const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-unmute safety net
   const micKeepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null); // Keeps mic AudioContext alive on mobile
   const unmuteGuardRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Delays mic reopen past the TTS echo tail
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // Native-only: NativeAudio plugin listener handles, torn down on cleanup
+  const nativeChunkHandleRef = useRef<PluginListenerHandle | null>(null);
+  const nativePlaybackHandleRef = useRef<PluginListenerHandle | null>(null);
   // Token expiry timestamp (ms since epoch) from /api/gemini-token
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const tokenExpiresAtRef = useRef<number | null>(null);
@@ -288,50 +299,87 @@ export default function SessionPage() {
 
         const config: GeminiLiveConfig = { ...tokenData.data, sessionId, patientLang };
 
-        // 2. Create AudioContext at 16kHz — the reference AudioRecorder sets sampleRate: 16000
-        //    so no downsampling is needed in the worklet.
-        let audioContext: AudioContext;
-        try {
-          audioContext = new AudioContext({ sampleRate: 16000 });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logError({ errorType: 'audio_context', errorMessage: msg, sessionId, patientLang, context: { state: 'create' } });
-          throw err;
-        }
-        audioContextRef.current = audioContext;
+        // Native (Capacitor Android shell): mic capture + TTS playback go through the
+        // NativeAudio plugin (OS audio stack, hardware AEC) instead of Web Audio API,
+        // so the mic never needs to be muted during TTS (full duplex, real barge-in).
+        // Computed here (not module scope) because isNativeApp() needs `window`.
+        const native = isNativeApp();
 
-        // 3. Create AudioStreamer for playback (reference audio-streamer.ts)
-        const streamer = new AudioStreamer(new AudioContext({ sampleRate: 24000 }));
-        audioStreamerRef.current = streamer;
-        // Unmute mic when TTS playback finishes
-        streamer.onComplete = () => {
-          // Mobile browsers can suspend the mic AudioContext during/after playback,
-          // silently killing capture after a few turns. Revive it here.
-          if (audioContextRef.current?.state === 'suspended') {
-            audioContextRef.current.resume().catch(() => {});
+        // 2/3 (web only). Create the 16kHz mic AudioContext and the 24kHz playback
+        // AudioStreamer. Native skips both — the plugin owns audio I/O — so these
+        // stay null and every downstream use below is guarded by `native`.
+        let audioContext: AudioContext | null = null;
+        let streamer: AudioStreamer | null = null;
+        if (!native) {
+          // 2. Create AudioContext at 16kHz — the reference AudioRecorder sets sampleRate: 16000
+          //    so no downsampling is needed in the worklet.
+          try {
+            audioContext = new AudioContext({ sampleRate: 16000 });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logError({ errorType: 'audio_context', errorMessage: msg, sessionId, patientLang, context: { state: 'create' } });
+            throw err;
           }
-          if (playbackWatchdogRef.current) {
-            clearTimeout(playbackWatchdogRef.current);
-            playbackWatchdogRef.current = null;
+          audioContextRef.current = audioContext;
+
+          // 3. Create AudioStreamer for playback (reference audio-streamer.ts)
+          streamer = new AudioStreamer(new AudioContext({ sampleRate: 24000 }));
+          audioStreamerRef.current = streamer;
+          // Unmute mic when TTS playback finishes
+          streamer.onComplete = () => {
+            // Mobile browsers can suspend the mic AudioContext during/after playback,
+            // silently killing capture after a few turns. Revive it here.
+            if (audioContextRef.current?.state === 'suspended') {
+              audioContextRef.current.resume().catch(() => {});
+            }
+            if (playbackWatchdogRef.current) {
+              clearTimeout(playbackWatchdogRef.current);
+              playbackWatchdogRef.current = null;
+            }
+            // Echo guard-band: keep the mic muted ~0.8s AFTER playback ends so the
+            // acoustic tail/reverb of our own TTS (open speaker) isn't picked up as
+            // speech and re-translated — which caused overlapping "two voices" once
+            // start-sensitivity was raised to HIGH. If new audio arrives (next turn),
+            // onAudio cancels this timer.
+            if (unmuteGuardRef.current) clearTimeout(unmuteGuardRef.current);
+            unmuteGuardRef.current = setTimeout(() => {
+              isPlayingAudioRef.current = false;
+              setTtsPlaying(false);
+              unmuteGuardRef.current = null;
+            }, 800);
+          };
+          try {
+            await streamer.resume();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logError({ errorType: 'audio_context', errorMessage: msg, sessionId, patientLang, context: { state: streamer.context.state } });
+            throw err;
           }
-          // Echo guard-band: keep the mic muted ~0.8s AFTER playback ends so the
-          // acoustic tail/reverb of our own TTS (open speaker) isn't picked up as
-          // speech and re-translated — which caused overlapping "two voices" once
-          // start-sensitivity was raised to HIGH. If new audio arrives (next turn),
-          // onAudio cancels this timer.
-          if (unmuteGuardRef.current) clearTimeout(unmuteGuardRef.current);
-          unmuteGuardRef.current = setTimeout(() => {
-            isPlayingAudioRef.current = false;
-            setTtsPlaying(false);
-            unmuteGuardRef.current = null;
-          }, 800);
-        };
-        try {
-          await streamer.resume();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logError({ errorType: 'audio_context', errorMessage: msg, sessionId, patientLang, context: { state: streamer.context.state } });
-          throw err;
+        }
+
+        // Native: request mic permission and start plugin capture/playback before
+        // connecting to Gemini, so audio is flowing as soon as the session is up.
+        if (native) {
+          try {
+            const perm = await NativeAudio.requestPermissions();
+            if (perm.microphone !== 'granted') {
+              throw new Error('마이크 권한이 필요합니다. 설정에서 허용해 주세요.');
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logError({ errorType: 'mic_permission', errorMessage: msg, sessionId, patientLang });
+            throw err;
+          }
+          if (cancelled) { NativeAudio.stop().catch(() => {}); return; }
+
+          try {
+            await NativeAudio.start();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logError({ errorType: 'mic_permission', errorMessage: msg, sessionId, patientLang, context: { stage: 'native_start' } });
+            throw err;
+          }
+          if (cancelled) { NativeAudio.stop().catch(() => {}); return; }
         }
 
         // 4. Create Gemini Live session with callbacks
@@ -394,7 +442,22 @@ export default function SessionPage() {
               }));
             }
           },
-          onAudio: (data: ArrayBuffer) => {
+          onAudio: (data: ArrayBuffer, base64: string) => {
+            if (native) {
+              // Full duplex: hand the chunk straight to the plugin's playback track.
+              // isPlayingAudioRef stays false in native mode, so the mic is never muted.
+              NativeAudio.playPcm({ data: base64 }).catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                logError({
+                  errorType: 'audio_context',
+                  errorMessage: msg,
+                  sessionId,
+                  patientLang,
+                  context: { state: 'native_playPcm_failed' },
+                });
+              });
+              return;
+            }
             // New audio playing → cancel any pending echo guard-band unmute.
             if (unmuteGuardRef.current) {
               clearTimeout(unmuteGuardRef.current);
@@ -417,7 +480,7 @@ export default function SessionPage() {
               playbackWatchdogRef.current = null;
             }, 8000);
             // Ensure AudioContext is active (Chrome autoplay policy may suspend it)
-            if (streamer.context.state === "suspended") {
+            if (streamer && streamer.context.state === "suspended") {
               streamer.context.resume().catch((err: unknown) => {
                 const msg = err instanceof Error ? err.message : String(err);
                 logError({
@@ -429,9 +492,15 @@ export default function SessionPage() {
                 });
               });
             }
-            streamer.addPCM16(new Uint8Array(data));
+            streamer?.addPCM16(new Uint8Array(data));
           },
           onInterrupt: () => {
+            if (native) {
+              // Barge-in on native: drop queued audio and flag the UI as no-longer-playing.
+              NativeAudio.stopPlayback().catch(() => {});
+              setTtsPlaying(false);
+              return;
+            }
             // Stop playback and release the playing state. stop() now also calls
             // onComplete (which resets the flag + watchdog), but we reset here too
             // for immediacy. This is the path that used to freeze the app.
@@ -458,7 +527,39 @@ export default function SessionPage() {
 
         geminiSessionRef.current = session;
         await session.connect();
-        if (cancelled) { session.disconnect(); return; }
+        if (cancelled) {
+          session.disconnect();
+          if (native) NativeAudio.stop().catch(() => {});
+          return;
+        }
+
+        if (native) {
+          // Native full-duplex: forward every mic chunk straight to Gemini — no
+          // isPlayingAudioRef check, unlike the web worklet handler below, because
+          // hardware AEC means the mic staying open during TTS doesn't cause echo.
+          const chunkHandle = await NativeAudio.addListener("chunk", ({ data }) => {
+            session.sendAudio(data);
+          });
+          nativeChunkHandleRef.current = chunkHandle;
+          if (cancelled) {
+            chunkHandle.remove();
+            NativeAudio.stop().catch(() => {});
+            return;
+          }
+
+          // Drives only the UI turn indicator — isPlayingAudioRef stays false in
+          // native mode so the mic is never muted.
+          const playbackHandle = await NativeAudio.addListener("playbackState", ({ playing }) => {
+            setTtsPlaying(playing);
+          });
+          nativePlaybackHandleRef.current = playbackHandle;
+          if (cancelled) {
+            playbackHandle.remove();
+            chunkHandle.remove();
+            NativeAudio.stop().catch(() => {});
+          }
+          return;
+        }
 
         // 5. Start microphone capture. echoCancellation/noiseSuppression are kept
         //    as defense-in-depth for ambient echo while the mic is active between
@@ -480,18 +581,18 @@ export default function SessionPage() {
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         streamRef.current = stream;
 
-        const source = audioContext.createMediaStreamSource(stream);
+        const source = audioContext!.createMediaStreamSource(stream);
 
         // 6. Load AudioWorklet — matches reference audio-recorder.ts pattern
         //    The worklet sends { event: "chunk", data: { int16arrayBuffer } }
         try {
-          await audioContext.audioWorklet.addModule("/audio-processor.js");
+          await audioContext!.audioWorklet.addModule("/audio-processor.js");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logError({ errorType: 'audio_worklet', errorMessage: msg, sessionId, patientLang });
           throw err;
         }
-        const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
+        const workletNode = new AudioWorkletNode(audioContext!, "audio-processor");
         workletNodeRef.current = workletNode;
 
         workletNode.port.onmessage = (e: MessageEvent) => {
@@ -555,6 +656,15 @@ export default function SessionPage() {
       audioStreamerRef.current?.stop();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       geminiSessionRef.current?.disconnect();
+      // Native-only teardown: web refs above are already null-safe no-ops here.
+      if (isNativeApp()) {
+        nativeChunkHandleRef.current?.remove();
+        nativePlaybackHandleRef.current?.remove();
+        nativeChunkHandleRef.current = null;
+        nativePlaybackHandleRef.current = null;
+        NativeAudio.removeAllListeners().catch(() => {});
+        NativeAudio.stop().catch(() => {});
+      }
     };
   }, [patientLang]);
 
@@ -638,6 +748,9 @@ export default function SessionPage() {
     if (!confirm("통역을 종료하시겠습니까?")) return;
     geminiSessionRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (isNative) {
+      NativeAudio.stop().catch(() => {});
+    }
     try {
       await fetch("/api/session", {
         method: "PUT",
@@ -688,6 +801,7 @@ export default function SessionPage() {
           />
           <span className="text-sm text-gray-300 font-medium">
             {langLabel} ↔ 한국어
+            {isNative && <span className="text-[10px] text-emerald-400 ml-2">APP</span>}
           </span>
         </div>
         <button
@@ -743,7 +857,7 @@ export default function SessionPage() {
           </span>
         ) : ttsPlaying ? (
           <span className="px-5 py-2 rounded-full text-base font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-            🔴 통역 중 · 잠시만요
+            {isNative ? "🔊 통역 중 · 끼어들어도 됩니다" : "🔴 통역 중 · 잠시만요"}
           </span>
         ) : (
           <span className="px-6 py-2 rounded-full text-lg font-extrabold bg-green-500/20 text-green-300 border border-green-500/50 animate-pulse">

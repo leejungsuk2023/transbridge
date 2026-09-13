@@ -32,7 +32,7 @@ export interface GeminiLiveConfig {
 export interface GeminiLiveCallbacks {
   onOriginalText: (text: string) => void;
   onTranslatedText: (text: string) => void;
-  onAudio: (data: ArrayBuffer) => void;
+  onAudio: (data: ArrayBuffer, base64: string) => void;
   onError: (error: string) => void;
   onStateChange: (
     state: "connecting" | "connected" | "disconnected" | "reconnecting"
@@ -387,7 +387,7 @@ export class GeminiLiveSession {
             part.inlineData.data
           ) {
             const audioBuffer = base64ToArrayBuffer(part.inlineData.data);
-            this.callbacks.onAudio(audioBuffer);
+            this.callbacks.onAudio(audioBuffer, part.inlineData.data);
           }
         }
       }
