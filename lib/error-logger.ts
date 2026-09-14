@@ -17,6 +17,13 @@ type ErrorType =
   | 'session_fetch'         // /api/session failed
   | 'dual_routing'          // dual-channel native audio start() succeeded — logs the DeviceReport
   | 'dual_fallback'         // dual-channel native audio start() rejected — fell back to single mode
+  // TEMPORARY (native single-mode only, gated by DEBUG_TRACE in page.tsx): traces
+  // input/output transcript fragments and turn/playback events to diagnose a
+  // reported Vietnamese-echo bug (native app answered in Vietnamese instead of
+  // Korean). Remove these three once that's root-caused.
+  | 'dbg_in'                // onOriginalText fragment
+  | 'dbg_out'               // onTranslatedText fragment
+  | 'dbg_evt'               // interrupt / turnComplete / playbackState change
   | 'unknown';
 
 export interface LogErrorParams {

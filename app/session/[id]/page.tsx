@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
-import PrompterDisplay from "@/components/PrompterDisplay";
-import { PatientLang, SpeakerRole } from "@/types";
+import ConversationLog from "@/components/ConversationLog";
+import { PatientLang } from "@/types";
 import {
   GeminiLiveSession,
   GeminiLiveConfig,
@@ -13,6 +13,14 @@ import {
 import { logError } from "@/lib/error-logger";
 import { NativeAudio, isNativeApp, DeviceReport } from "@/lib/native-audio";
 import type { PluginListenerHandle } from "@capacitor/core";
+import { Turn, startTurn, appendOriginal, appendTranslated, completeTurn } from "@/lib/turn-log";
+
+// TEMPORARY: on-device trace for diagnosing a reported native single-mode bug
+// (patient spoke Vietnamese, app answered in Vietnamese instead of Korean).
+// Logs raw transcript fragments + turn/playback events via the existing
+// error_logs table (see lib/error-logger.ts dbg_in/dbg_out/dbg_evt). Flip to
+// false (or delete the call sites) once that's root-caused.
+const DEBUG_TRACE = true;
 
 // ---------------------------------------------------------------------------
 // Dual-engine constants
@@ -191,14 +199,6 @@ class AudioStreamer {
 // ---------------------------------------------------------------------------
 type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
-interface PrompterState {
-  text: string;
-  glossaryTerms: string[];
-  speaker: SpeakerRole;
-}
-
-const EMPTY_PROMPTER: PrompterState = { text: "", glossaryTerms: [], speaker: "staff" };
-
 /** Combines two sessions' connection states into one, biased toward the worse state. */
 function worstConnectionState(a: ConnectionState, b: ConnectionState): ConnectionState {
   const rank: Record<ConnectionState, number> = {
@@ -234,8 +234,7 @@ interface StartDualEngineParams {
   setConnectionState: (s: ConnectionState) => void;
   connectionStateRef: React.MutableRefObject<ConnectionState>;
   setReconnectExhausted: (b: boolean) => void;
-  setPatientPrompter: React.Dispatch<React.SetStateAction<PrompterState>>;
-  setStaffPrompter: React.Dispatch<React.SetStateAction<PrompterState>>;
+  setTurns: React.Dispatch<React.SetStateAction<Turn[]>>;
   setStaffTtsPlaying: (b: boolean) => void;
   setPatientTtsPlaying: (b: boolean) => void;
   setDeviceReport: (r: DeviceReport) => void;
@@ -254,8 +253,7 @@ async function startDualEngine(params: StartDualEngineParams): Promise<() => voi
     setConnectionState,
     connectionStateRef,
     setReconnectExhausted,
-    setPatientPrompter,
-    setStaffPrompter,
+    setTurns,
     setStaffTtsPlaying,
     setPatientTtsPlaying,
     setDeviceReport,
@@ -265,28 +263,48 @@ async function startDualEngine(params: StartDualEngineParams): Promise<() => voi
   } = params;
 
   const translateModel = tokenData.translateModel ?? DEFAULT_TRANSLATE_MODEL;
-  const STATUS_TEXT = "🎤 잘 들었어요. 통역 시작합니다...";
 
-  // Per-session "turn started" flags: staff-session output always targets the
-  // patient prompter, patient-session output always targets the staff prompter.
-  // Each flips false on that session's turnComplete so the next turn replaces
-  // rather than appends — the two directions never share or clobber one flag.
-  const staffTurnStartedRef = { current: false };
-  const patientTurnStartedRef = { current: false };
+  // Per-session current-turn id: staff-session turns are always speaker "staff"
+  // (it only ever hears the staff headset), patient-session turns are always
+  // speaker "patient" — the direction is known up front here, unlike the
+  // single-session path below where the speaker must be inferred from output.
+  // Plain closure variables (not refs) since this helper isn't a component.
+  let staffTurnId: string | null = null;
+  let patientTurnId: string | null = null;
+
   // Gap-timer fallback: the translate model does not always send turnComplete
   // (observed in the June evaluation). If no transcript arrives for TURN_GAP_MS,
-  // treat the turn as over so the next utterance replaces instead of appending
-  // forever. Both this timer and turnComplete clear the flag; either suffices.
+  // treat the turn as over so the next utterance starts a fresh Turn instead of
+  // appending forever. Both this timer and turnComplete/onInterrupt complete
+  // the turn; completeStaffTurn/completePatientTurn are idempotent (a no-op
+  // once the id has already been cleared), so whichever fires first wins.
   const TURN_GAP_MS = 2500;
   let staffGapTimer: ReturnType<typeof setTimeout> | null = null;
   let patientGapTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const completeStaffTurn = () => {
+    if (staffGapTimer) { clearTimeout(staffGapTimer); staffGapTimer = null; }
+    const id = staffTurnId;
+    if (id) {
+      staffTurnId = null;
+      setTurns((prev) => completeTurn(prev, id));
+    }
+  };
+  const completePatientTurn = () => {
+    if (patientGapTimer) { clearTimeout(patientGapTimer); patientGapTimer = null; }
+    const id = patientTurnId;
+    if (id) {
+      patientTurnId = null;
+      setTurns((prev) => completeTurn(prev, id));
+    }
+  };
   const armStaffGap = () => {
     if (staffGapTimer) clearTimeout(staffGapTimer);
-    staffGapTimer = setTimeout(() => { staffTurnStartedRef.current = false; }, TURN_GAP_MS);
+    staffGapTimer = setTimeout(completeStaffTurn, TURN_GAP_MS);
   };
   const armPatientGap = () => {
     if (patientGapTimer) clearTimeout(patientGapTimer);
-    patientGapTimer = setTimeout(() => { patientTurnStartedRef.current = false; }, TURN_GAP_MS);
+    patientGapTimer = setTimeout(completePatientTurn, TURN_GAP_MS);
   };
   const staffStateRef: { current: ConnectionState } = { current: "connecting" };
   const patientStateRef: { current: ConnectionState } = { current: "connecting" };
@@ -298,26 +316,25 @@ async function startDualEngine(params: StartDualEngineParams): Promise<() => voi
   };
 
   const staffCallbacks: GeminiLiveCallbacks = {
-    onOriginalText: () => {
-      setStaffPrompter((prev) =>
-        prev.text === STATUS_TEXT && prev.speaker === "staff"
-          ? prev
-          : { text: STATUS_TEXT, glossaryTerms: [], speaker: "staff" }
-      );
+    onOriginalText: (text) => {
+      armStaffGap();
+      setTurns((prev) => {
+        if (staffTurnId) return appendOriginal(prev, staffTurnId, text);
+        const { turns, id } = startTurn(prev, "staff");
+        staffTurnId = id;
+        return appendOriginal(turns, id, text);
+      });
     },
     onTranslatedText: (text) => {
-      // Read/flip the flag outside the updater: React may invoke updaters twice.
-      const append = staffTurnStartedRef.current;
-      staffTurnStartedRef.current = true;
       armStaffGap();
-      setPatientPrompter((prev) => ({
-        ...prev, text: append ? prev.text + text : text, speaker: "staff",
-      }));
+      setTurns((prev) => {
+        if (staffTurnId) return appendTranslated(prev, staffTurnId, text);
+        const { turns, id } = startTurn(prev, "staff");
+        staffTurnId = id;
+        return appendTranslated(turns, id, text);
+      });
     },
-    onTurnComplete: () => {
-      staffTurnStartedRef.current = false;
-      if (staffGapTimer) { clearTimeout(staffGapTimer); staffGapTimer = null; }
-    },
+    onTurnComplete: completeStaffTurn,
     onAudio: (_data, base64) => {
       NativeAudio.playPcm({ data: base64, channel: "patient" }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -343,25 +360,25 @@ async function startDualEngine(params: StartDualEngineParams): Promise<() => voi
   };
 
   const patientCallbacks: GeminiLiveCallbacks = {
-    onOriginalText: () => {
-      setPatientPrompter((prev) =>
-        prev.text === STATUS_TEXT && prev.speaker === "patient"
-          ? prev
-          : { text: STATUS_TEXT, glossaryTerms: [], speaker: "patient" }
-      );
+    onOriginalText: (text) => {
+      armPatientGap();
+      setTurns((prev) => {
+        if (patientTurnId) return appendOriginal(prev, patientTurnId, text);
+        const { turns, id } = startTurn(prev, "patient");
+        patientTurnId = id;
+        return appendOriginal(turns, id, text);
+      });
     },
     onTranslatedText: (text) => {
-      const append = patientTurnStartedRef.current;
-      patientTurnStartedRef.current = true;
       armPatientGap();
-      setStaffPrompter((prev) => ({
-        ...prev, text: append ? prev.text + text : text, speaker: "patient",
-      }));
+      setTurns((prev) => {
+        if (patientTurnId) return appendTranslated(prev, patientTurnId, text);
+        const { turns, id } = startTurn(prev, "patient");
+        patientTurnId = id;
+        return appendTranslated(turns, id, text);
+      });
     },
-    onTurnComplete: () => {
-      patientTurnStartedRef.current = false;
-      if (patientGapTimer) { clearTimeout(patientGapTimer); patientGapTimer = null; }
-    },
+    onTurnComplete: completePatientTurn,
     onAudio: (_data, base64) => {
       NativeAudio.playPcm({ data: base64, channel: "staff" }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -487,8 +504,7 @@ export default function SessionPage() {
   }
 
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
-  const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
-  const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reconnectExhausted, setReconnectExhausted] = useState(false);
   const [ttsPlaying, setTtsPlaying] = useState(false); // mirrors isPlayingAudioRef for the UI turn indicator (single/web mode)
@@ -541,12 +557,20 @@ export default function SessionPage() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const lastInputWasKoreanRef = useRef(true); // Track last input language for echo filter
   const isPlayingAudioRef = useRef(false); // True while TTS audio is playing — mute mic to prevent echo (web only; stays false in native)
   const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Force-unmute safety net
   const micKeepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null); // Keeps mic AudioContext alive on mobile
   const unmuteGuardRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Delays mic reopen past the TTS echo tail
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // Single-mode (web + native single) conversation log: the turn currently being
+  // filled in by onOriginalText/onTranslatedText fragments, and a gap-timer
+  // fallback that completes it if turnComplete never arrives (see lib/turn-log.ts).
+  const currentTurnIdRef = useRef<string | null>(null);
+  const turnGapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // TEMPORARY: mirrors native playbackState for the dbg_in trace's `ttsPlaying`
+  // context (isPlayingAudioRef always stays false in native mode, so it isn't
+  // useful there). Remove alongside DEBUG_TRACE.
+  const nativeTtsPlayingRef = useRef(false);
   // Native-only: NativeAudio plugin listener handles, torn down on cleanup
   const nativeChunkHandleRef = useRef<PluginListenerHandle | null>(null);
   const nativePlaybackHandleRef = useRef<PluginListenerHandle | null>(null);
@@ -747,8 +771,7 @@ export default function SessionPage() {
                 setConnectionState: (s) => setConnectionState(s),
                 connectionStateRef,
                 setReconnectExhausted,
-                setPatientPrompter,
-                setStaffPrompter,
+                setTurns,
                 setStaffTtsPlaying,
                 setPatientTtsPlaying,
                 setDeviceReport,
@@ -778,65 +801,84 @@ export default function SessionPage() {
           if (cancelled) { NativeAudio.stop().catch(() => {}); return; }
         }
 
+        // Single-mode conversation log: completes the in-flight turn (used by
+        // onTurnComplete, onInterrupt, and the gap-timer fallback below).
+        const TURN_GAP_MS = 2500;
+        const completeCurrentTurn = () => {
+          if (turnGapTimerRef.current) {
+            clearTimeout(turnGapTimerRef.current);
+            turnGapTimerRef.current = null;
+          }
+          const id = currentTurnIdRef.current;
+          if (id) {
+            currentTurnIdRef.current = null;
+            setTurns((prev) => completeTurn(prev, id));
+          }
+        };
+        // Gap-timer fallback: re-armed on every original/translated fragment so a
+        // turn that never gets an explicit turnComplete (observed with some model
+        // variants) still closes out after a pause, instead of the next utterance
+        // appending onto it forever.
+        const armTurnGap = () => {
+          if (turnGapTimerRef.current) clearTimeout(turnGapTimerRef.current);
+          turnGapTimerRef.current = setTimeout(completeCurrentTurn, TURN_GAP_MS);
+        };
+
         // 4. Create Gemini Live session with callbacks
         const session = new GeminiLiveSession(config, {
           onOriginalText: (text) => {
             // ECHO FILTER: ignore inputTranscription that arrives while TTS is playing
             if (isPlayingAudioRef.current) return;
 
-            const isKorean = /[\uac00-\ud7af]/.test(text);
-            lastInputWasKoreanRef.current = isKorean;
-
-            // Native-audio model's inputTranscription is less accurate than its
-            // end-to-end translation. Showing the raw transcript made users think
-            // the app was broken even when the translation was correct. Show a
-            // friendly status on the speaker's side; the listener still sees the
-            // accurate translation in their area via onTranslatedText.
-            const STATUS_TEXT = "🎤 잘 들었어요. 통역 시작합니다...";
-
-            if (isKorean) {
-              setStaffPrompter((prev) =>
-                prev.text === STATUS_TEXT && prev.speaker === "staff"
-                  ? prev
-                  : { text: STATUS_TEXT, glossaryTerms: [], speaker: "staff" }
-              );
-            } else {
-              setPatientPrompter((prev) =>
-                prev.text === STATUS_TEXT && prev.speaker === "patient"
-                  ? prev
-                  : { text: STATUS_TEXT, glossaryTerms: [], speaker: "patient" }
-              );
+            // TEMPORARY DIAGNOSTIC TRACE (native single mode only) — see DEBUG_TRACE comment above.
+            if (native && DEBUG_TRACE) {
+              logError({
+                errorType: 'dbg_in',
+                errorMessage: text,
+                sessionId,
+                patientLang,
+                context: { ttsPlaying: nativeTtsPlayingRef.current },
+              });
             }
+
+            armTurnGap();
+            setTurns((prev) => {
+              if (currentTurnIdRef.current) {
+                return appendOriginal(prev, currentTurnIdRef.current, text);
+              }
+              const { turns, id } = startTurn(prev, null);
+              currentTurnIdRef.current = id;
+              return appendOriginal(turns, id, text);
+            });
           },
           onTranslatedText: (text) => {
-            const isKorean = /[\uac00-\ud7af]/.test(text);
-            const lastInputKorean = lastInputWasKoreanRef.current;
-
-            // NOTE: same-language echo suppression REMOVED entirely. It relied on
-            // lastInputWasKorean, which is derived from inputTranscription that
-            // arrives in fragments — the trailing fragment (often just "." ) flipped
-            // the language flag and made the filter DELETE legitimate translations
-            // (confirmed via debug logs: KO→EN output "Hello, where does it hurt?"
-            // was suppressed because the last input fragment was punctuation).
-            // Half-duplex mic-mute during TTS already prevents the audio echo loop,
-            // so the text filter was both redundant and harmful. Route purely by
-            // the OUTPUT language below.
-            void lastInputKorean;
-
-            // Accumulate translated text
-            if (isKorean) {
-              setStaffPrompter((prev) => ({
-                ...prev,
-                text: prev.speaker === "patient" ? prev.text + text : text,
-                speaker: "patient",
-              }));
-            } else {
-              setPatientPrompter((prev) => ({
-                ...prev,
-                text: prev.speaker === "staff" ? prev.text + text : text,
-                speaker: "staff",
-              }));
+            // TEMPORARY DIAGNOSTIC TRACE (native single mode only) — see DEBUG_TRACE comment above.
+            if (native && DEBUG_TRACE) {
+              logError({ errorType: 'dbg_out', errorMessage: text, sessionId, patientLang });
             }
+
+            // Speaker for a turn started from onOriginalText is unknown until now —
+            // appendTranslated resolves it from the OUTPUT language (Korean output
+            // means the patient spoke; anything else means the staff spoke).
+            // inputTranscription is fragmentary/unreliable for this: the same-
+            // language echo filter that used to key off it was removed entirely
+            // (a trailing fragment — often just "." — flipped the detected input
+            // language and deleted legitimate translations). Output is authoritative.
+            armTurnGap();
+            setTurns((prev) => {
+              if (currentTurnIdRef.current) {
+                return appendTranslated(prev, currentTurnIdRef.current, text);
+              }
+              const { turns, id } = startTurn(prev, null);
+              currentTurnIdRef.current = id;
+              return appendTranslated(turns, id, text);
+            });
+          },
+          onTurnComplete: () => {
+            if (native && DEBUG_TRACE) {
+              logError({ errorType: 'dbg_evt', errorMessage: 'turnComplete', sessionId, patientLang });
+            }
+            completeCurrentTurn();
           },
           onAudio: (data: ArrayBuffer, base64: string) => {
             if (native) {
@@ -891,6 +933,10 @@ export default function SessionPage() {
             streamer?.addPCM16(new Uint8Array(data));
           },
           onInterrupt: () => {
+            if (native && DEBUG_TRACE) {
+              logError({ errorType: 'dbg_evt', errorMessage: 'interrupted', sessionId, patientLang });
+            }
+            completeCurrentTurn();
             if (native) {
               // Barge-in on native: drop queued audio and flag the UI as no-longer-playing.
               NativeAudio.stopPlayback().catch(() => {});
@@ -946,6 +992,15 @@ export default function SessionPage() {
           // Drives only the UI turn indicator — isPlayingAudioRef stays false in
           // native mode so the mic is never muted.
           const playbackHandle = await NativeAudio.addListener("playbackState", ({ playing }) => {
+            nativeTtsPlayingRef.current = playing;
+            if (DEBUG_TRACE) {
+              logError({
+                errorType: 'dbg_evt',
+                errorMessage: playing ? 'playback:true' : 'playback:false',
+                sessionId,
+                patientLang,
+              });
+            }
             setTtsPlaying(playing);
           });
           nativePlaybackHandleRef.current = playbackHandle;
@@ -1050,6 +1105,10 @@ export default function SessionPage() {
       if (unmuteGuardRef.current) {
         clearTimeout(unmuteGuardRef.current);
         unmuteGuardRef.current = null;
+      }
+      if (turnGapTimerRef.current) {
+        clearTimeout(turnGapTimerRef.current);
+        turnGapTimerRef.current = null;
       }
       workletNodeRef.current?.disconnect();
       audioContextRef.current?.close();
@@ -1272,12 +1331,7 @@ export default function SessionPage() {
 
       {/* Patient area (top half) */}
       <div className={`flex-1 flex flex-col min-h-0 p-3 ${flipPatient ? "rotate-180" : ""}`}>
-        <PrompterDisplay
-          text={patientPrompter.text}
-          glossaryTerms={patientPrompter.glossaryTerms}
-          speaker={patientPrompter.speaker}
-          lang={patientLang}
-        />
+        <ConversationLog turns={turns} side="patient" lang={patientLang} />
       </div>
 
       {/* Turn indicator — tells the user when the mic is listening */}
@@ -1308,12 +1362,7 @@ export default function SessionPage() {
 
       {/* Staff area (bottom half) */}
       <div className="flex-1 flex flex-col min-h-0 p-3">
-        <PrompterDisplay
-          text={staffPrompter.text}
-          glossaryTerms={staffPrompter.glossaryTerms}
-          speaker={staffPrompter.speaker}
-          lang={patientLang}
-        />
+        <ConversationLog turns={turns} side="staff" lang={patientLang} />
       </div>
 
       {/* Status footer */}
