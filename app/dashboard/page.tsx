@@ -6,36 +6,6 @@ import { getSupabaseBrowserClient } from "@/lib/supabase";
 import { PatientLang } from "@/types";
 import { BUILD_SHA, useReloadOnNewBuild } from "@/lib/build-version";
 
-/** Maps patient language codes to display flag and Korean name */
-const LANG_MAP: Record<string, { flag: string; name: string }> = {
-  th: { flag: "🇹🇭", name: "태국어" },
-  vi: { flag: "🇻🇳", name: "베트남어" },
-  en: { flag: "🇺🇸", name: "영어" },
-  id: { flag: "🇮🇩", name: "인도네시아어" },
-  es: { flag: "🇪🇸", name: "스페인어" },
-  mn: { flag: "🇲🇳", name: "몽골어" },
-  yue: { flag: "🇭🇰", name: "광동어" },
-  zh: { flag: "🇨🇳", name: "북경어" },
-  ja: { flag: "🇯🇵", name: "일본어" },
-  fr: { flag: "🇫🇷", name: "프랑스어" },
-  de: { flag: "🇩🇪", name: "독일어" },
-};
-
-/** Format seconds into "X분 Y초" string */
-function formatDuration(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  if (m === 0) return `${s}초`;
-  if (s === 0) return `${m}분`;
-  return `${m}분 ${s}초`;
-}
-
-/** Format ISO date string into "YYYY-MM-DD" */
-function formatDate(dateVal: string | Date): string {
-  const d = typeof dateVal === "string" ? new Date(dateVal) : dateVal;
-  return d.toISOString().slice(0, 10);
-}
-
 const PATIENT_LANGS: { code: PatientLang; flag: string; native: string; korean: string }[] = [
   { code: "th", flag: "🇹🇭", native: "ภาษาไทย", korean: "태국어" },
   { code: "vi", flag: "🇻🇳", native: "Tiếng Việt", korean: "베트남어" },
@@ -78,106 +48,28 @@ export default function DashboardPage() {
     });
   };
 
-  // Real session data from Supabase
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [stats, setStats] = useState({
-    total: 0,
-    totalMinutes: 0,
-    byLang: {} as Record<string, number>,
-  });
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [fetchTick, setFetchTick] = useState(0); // increment to re-trigger fetchData
   const [hospitalName, setHospitalName] = useState("");
 
+  // Fetch the hospital name for the logged-in user (cosmetic header text).
   useEffect(() => {
-    const controller = new AbortController();
-
-    // Auto-abort and show error after 10 seconds
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 10000);
-
-    async function fetchData() {
-      setLoadError(false);
-      setLoading(true);
-
+    let cancelled = false;
+    (async () => {
       const supabase = getSupabaseBrowserClient();
       const { data: { session: authSession } } = await supabase.auth.getSession();
-      if (!authSession) {
-        clearTimeout(timeoutId);
-        setLoading(false);
-        return;
-      }
-      const token = authSession.access_token;
-
-      // Fetch hospital name for the logged-in user
+      if (!authSession || cancelled) return;
       try {
-        const userId = authSession.user.id;
         const { data: hospital } = await supabase
           .from("hospitals")
           .select("name")
-          .eq("auth_user_id", userId)
+          .eq("auth_user_id", authSession.user.id)
           .single();
-        if (hospital?.name) setHospitalName(hospital.name);
+        if (hospital?.name && !cancelled) setHospitalName(hospital.name);
       } catch {
         // Ignore — hospital name is cosmetic
       }
-
-      try {
-        const res = await fetch("/api/session/list?limit=100", {
-          headers: { Authorization: `Bearer ${token}`, "Cache-Control": "no-cache" },
-          signal: controller.signal,
-        });
-        const result = await res.json();
-
-        if (result.success && result.data?.sessions) {
-          const sessionList = result.data.sessions;
-          setSessions(sessionList);
-
-          // Calculate stats for the current month
-          type SessionRow = { startedAt: string; durationSec?: number; patientLang?: string };
-          const now = new Date();
-          const thisMonth = (sessionList as SessionRow[]).filter((s) => {
-            const d = new Date(s.startedAt);
-            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-          });
-
-          const totalSeconds = thisMonth.reduce(
-            (sum: number, s: SessionRow) => sum + (s.durationSec || 0),
-            0
-          );
-          const byLang: Record<string, number> = {};
-          thisMonth.forEach((s: SessionRow) => {
-            const lang = s.patientLang || "unknown";
-            byLang[lang] = (byLang[lang] || 0) + 1;
-          });
-
-          setStats({
-            total: thisMonth.length,
-            totalMinutes: Math.floor(totalSeconds / 60),
-            byLang,
-          });
-        }
-      } catch (err) {
-        if ((err as Error).name !== "AbortError") {
-          console.error("[Dashboard] Failed to fetch sessions:", err);
-        }
-        setLoadError(true);
-      } finally {
-        clearTimeout(timeoutId);
-        setLoading(false);
-      }
-    }
-
-    fetchData();
-
-    return () => {
-      clearTimeout(timeoutId);
-      controller.abort();
-    };
-  }, [fetchTick]);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleNewSession = async () => {
     if (!selectedLang) return;
@@ -333,140 +225,6 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        {/* Stats cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
-            <p className="text-xs text-gray-500 mb-1">이번달 통역</p>
-            <p className="text-2xl font-bold text-gray-900">
-              {loading || loadError ? "—" : stats.total}
-              {!loading && !loadError && <span className="text-sm font-normal text-gray-500 ml-1">건</span>}
-            </p>
-          </div>
-          <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
-            <p className="text-xs text-gray-500 mb-1">총 사용시간</p>
-            <p className="text-xl font-bold text-gray-900">
-              {loading || loadError ? (
-                "—"
-              ) : stats.totalMinutes >= 60 ? (
-                <>
-                  {Math.floor(stats.totalMinutes / 60)}
-                  <span className="text-sm font-normal text-gray-500">시간</span>{" "}
-                  {stats.totalMinutes % 60}
-                  <span className="text-sm font-normal text-gray-500">분</span>
-                </>
-              ) : (
-                <>
-                  {stats.totalMinutes}
-                  <span className="text-sm font-normal text-gray-500">분</span>
-                </>
-              )}
-            </p>
-          </div>
-          {/* Top 2 languages by session count this month */}
-          {loading || loadError ? (
-            <>
-              <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
-                <p className="text-xs text-gray-500 mb-1">—</p>
-                <p className="text-2xl font-bold text-gray-400">—</p>
-              </div>
-              <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
-                <p className="text-xs text-gray-500 mb-1">—</p>
-                <p className="text-2xl font-bold text-gray-400">—</p>
-              </div>
-            </>
-          ) : (
-            (() => {
-              const topLangs = Object.entries(stats.byLang)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 2);
-              // Pad to always render 2 cards
-              while (topLangs.length < 2) topLangs.push(["", 0]);
-              const colors = [
-                "bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent",
-                "bg-gradient-to-r from-fuchsia-500 to-purple-500 bg-clip-text text-transparent",
-              ];
-              return topLangs.map(([code, count], i) => (
-                <div key={code || `empty-${i}`} className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 p-4">
-                  <p className="text-xs text-gray-500 mb-1">
-                    {code ? (LANG_MAP[code]?.name ?? code) : "—"}
-                  </p>
-                  <p className={`text-2xl font-bold ${code ? colors[i] : "text-gray-400"}`}>
-                    {code ? count : "—"}
-                    {code && <span className="text-sm font-normal text-gray-500 ml-1">건</span>}
-                  </p>
-                </div>
-              ));
-            })()
-          )}
-        </div>
-
-        {/* Recent sessions table */}
-        <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/60 shadow-xl shadow-indigo-500/10 overflow-hidden">
-          <div className="px-5 py-4 border-b border-white/60">
-            <h2 className="font-bold bg-gradient-to-r from-blue-600 to-fuchsia-600 bg-clip-text text-transparent">
-              최근 통역 내역
-            </h2>
-          </div>
-          <div className="overflow-x-auto">
-            {loading ? (
-              <div className="px-5 py-8 text-center text-sm text-gray-400">불러오는 중...</div>
-            ) : loadError ? (
-              <div className="px-5 py-8 text-center">
-                <p className="text-sm text-gray-500 mb-3">데이터를 불러올 수 없습니다</p>
-                <button
-                  onClick={() => setFetchTick((t) => t + 1)}
-                  className="text-sm font-medium bg-gradient-to-r from-blue-600 to-fuchsia-600 bg-clip-text text-transparent underline underline-offset-2 transition"
-                >
-                  다시 불러오기
-                </button>
-              </div>
-            ) : sessions.length === 0 ? (
-              <div className="px-5 py-8 text-center text-sm text-gray-400">아직 통역 이력이 없습니다</div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gradient-to-r from-indigo-50/60 to-fuchsia-50/60">
-                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">날짜</th>
-                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">언어</th>
-                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">시간</th>
-                    <th className="text-left px-5 py-3 text-xs font-medium text-indigo-400 uppercase tracking-wider">상태</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-indigo-50/60">
-                  {sessions.map((session) => {
-                    const langInfo = LANG_MAP[session.patientLang] ?? { flag: "🌐", name: session.patientLang ?? "—" };
-                    // A session is only considered "진행중" if status is not ended AND it started within the last 2 hours.
-                    // Older non-ended sessions are orphaned (client crashed) and are shown as "완료".
-                    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
-                    const isActive = session.status !== "ended" && new Date(session.startedAt).getTime() > twoHoursAgo;
-                    return (
-                      <tr key={session.id} className="hover:bg-indigo-50/30 transition">
-                        <td className="px-5 py-3.5 text-gray-600">{formatDate(session.startedAt)}</td>
-                        <td className="px-5 py-3.5">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 border border-blue-100/60">
-                            {langInfo.flag} {langInfo.name}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-gray-600">
-                          {session.durationSec != null ? formatDuration(session.durationSec) : "—"}
-                        </td>
-                        <td className="px-5 py-3.5">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            isActive
-                              ? "bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 border border-emerald-100/60"
-                              : "bg-gray-100/80 text-gray-500 border border-gray-200/60"
-                          }`}>
-                            {isActive ? "진행중" : "완료"}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );
