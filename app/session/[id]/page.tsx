@@ -14,6 +14,7 @@ import { logError } from "@/lib/error-logger";
 import { NativeAudio, isNativeApp, DeviceReport } from "@/lib/native-audio";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { Turn, startTurn, appendOriginal, appendTranslated, completeTurn } from "@/lib/turn-log";
+import { BUILD_SHA } from "@/lib/build-version";
 
 // TEMPORARY: on-device trace for diagnosing a reported native single-mode bug
 // (patient spoke Vietnamese, app answered in Vietnamese instead of Korean).
@@ -1375,7 +1376,10 @@ export default function SessionPage() {
           />
           <span className="text-xs text-gray-400">🎤 {stateLabel}</span>
         </div>
-        <span className="text-xs text-gray-500 font-mono">{timer}</span>
+        <div className="flex items-center">
+          <span className="text-xs text-gray-500 font-mono">{timer}</span>
+          <span className="text-[10px] text-gray-600 font-mono ml-2">v{BUILD_SHA}</span>
+        </div>
       </div>
     </div>
   );

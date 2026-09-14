@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 import { PatientLang } from "@/types";
+import { BUILD_SHA, useReloadOnNewBuild } from "@/lib/build-version";
 
 /** Maps patient language codes to display flag and Korean name */
 const LANG_MAP: Record<string, { flag: string; name: string }> = {
@@ -50,6 +51,7 @@ const PATIENT_LANGS: { code: PatientLang; flag: string; native: string; korean: 
 ];
 
 export default function DashboardPage() {
+  useReloadOnNewBuild();
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<PatientLang | null>(null);
   const [starting, setStarting] = useState(false);
@@ -245,16 +247,19 @@ export default function DashboardPage() {
               <p className="text-xs font-medium text-indigo-500">{hospitalName || "병원"}</p>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="text-sm text-gray-500 hover:text-fuchsia-600 flex items-center gap-1.5 transition hover:-translate-y-0.5"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-            로그아웃
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-gray-400">v{BUILD_SHA}</span>
+            <button
+              onClick={handleLogout}
+              className="text-sm text-gray-500 hover:text-fuchsia-600 flex items-center gap-1.5 transition hover:-translate-y-0.5"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              로그아웃
+            </button>
+          </div>
         </div>
       </header>
 
