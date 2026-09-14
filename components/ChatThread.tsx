@@ -40,7 +40,7 @@ export default function ChatThread({ turns, lang }: ChatThreadProps) {
   return (
     <div
       ref={scrollRef}
-      className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3"
+      className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-1.5"
     >
       {isEmpty ? (
         <div className="flex items-center justify-center h-full">
@@ -79,27 +79,27 @@ export default function ChatThread({ turns, lang }: ChatThreadProps) {
           if (!original && translated) {
             // Native audio input transcript is sometimes empty — show translation only.
             body = (
-              <p className="text-xl font-bold text-white break-words">
+              <p className="text-sm font-bold text-white break-words">
                 <GlossaryHighlight text={translated} glossaryTerms={[]} />
                 {translatedPulsing && <span className="animate-pulse text-gray-300">…</span>}
               </p>
             );
           } else if (original && !translated && turn.done) {
             body = (
-              <p className="text-base text-gray-100 break-words">
+              <p className="text-xs text-gray-300 break-words">
                 {original}
-                <span className="text-gray-500 text-sm ml-1">(번역 없음)</span>
+                <span className="text-gray-500 text-[10px] ml-1">(번역 없음)</span>
               </p>
             );
           } else {
             body = (
               <>
-                <p className="text-base text-gray-100 break-words">
+                <p className="text-xs text-gray-300 break-words">
                   {original}
                   {originalPulsing && <span className="animate-pulse text-gray-300">…</span>}
                 </p>
                 {(translated || translatedPulsing) && (
-                  <p className="text-xl font-bold text-white break-words mt-1">
+                  <p className="text-sm font-bold text-white break-words mt-0.5">
                     <GlossaryHighlight text={translated} glossaryTerms={[]} />
                     {translatedPulsing && <span className="animate-pulse text-gray-300">…</span>}
                   </p>
@@ -111,11 +111,11 @@ export default function ChatThread({ turns, lang }: ChatThreadProps) {
           return (
             <div
               key={turn.id}
-              className={`${align} max-w-[88%] ${bubbleBg} ${bubbleCorner} rounded-2xl px-4 py-2.5`}
+              className={`${align} max-w-[80%] ${bubbleBg} ${bubbleCorner} rounded-xl px-2.5 py-1.5`}
             >
-              <div className={`flex items-center gap-2 mb-1 text-xs ${labelColor}`}>
+              <div className={`flex items-center gap-1.5 mb-0.5 text-[10px] ${labelColor}`}>
                 <span className="font-semibold">{label}</span>
-                <span className="text-[10px] text-gray-500 ml-auto">
+                <span className="text-[9px] text-gray-500 ml-auto">
                   {formatTime(turn.startedAt)}
                 </span>
               </div>
