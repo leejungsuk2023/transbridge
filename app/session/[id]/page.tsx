@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
-import ConversationLog from "@/components/ConversationLog";
+import ChatThread from "@/components/ChatThread";
 import { PatientLang } from "@/types";
 import {
   GeminiLiveSession,
@@ -526,28 +526,6 @@ export default function SessionPage() {
   const [deviceReport, setDeviceReport] = useState<DeviceReport | null>(null);
   const [staffTtsPlaying, setStaffTtsPlaying] = useState(false);
   const [patientTtsPlaying, setPatientTtsPlaying] = useState(false);
-
-  // Face-to-face flip: rotates the patient half 180° so a patient sitting across
-  // the desk reads it upright. Persisted per-device.
-  const [flipPatient, setFlipPatient] = useState(false);
-  useEffect(() => {
-    try {
-      if (localStorage.getItem("mt_flip_patient") === "1") setFlipPatient(true);
-    } catch {
-      // Ignore — private browsing / storage disabled
-    }
-  }, []);
-  const toggleFlipPatient = () => {
-    setFlipPatient((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("mt_flip_patient", next ? "1" : "0");
-      } catch {
-        // Ignore
-      }
-      return next;
-    });
-  };
 
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
@@ -1284,12 +1262,6 @@ export default function SessionPage() {
         </div>
         <div className="flex items-center gap-1 flex-none">
           <button
-            onClick={toggleFlipPatient}
-            className="text-xs text-gray-400 hover:text-gray-200 font-medium px-2.5 py-1.5 rounded-lg hover:bg-gray-800 transition"
-          >
-            ↕ 환자화면
-          </button>
-          <button
             onClick={handleEndSession}
             className="text-sm text-red-400 hover:text-red-300 font-medium px-3 py-1.5 rounded-lg hover:bg-red-950 transition"
           >
@@ -1330,10 +1302,8 @@ export default function SessionPage() {
         </div>
       )}
 
-      {/* Patient area (top half) */}
-      <div className={`flex-1 flex flex-col min-h-0 p-3 ${flipPatient ? "rotate-180" : ""}`}>
-        <ConversationLog turns={turns} side="patient" lang={patientLang} />
-      </div>
+      {/* Conversation thread — single chat room, every turn in order */}
+      <ChatThread turns={turns} lang={patientLang} />
 
       {/* Turn indicator — tells the user when the mic is listening */}
       <div className="flex-none flex items-center justify-center py-2 bg-gray-950 border-y border-gray-800 gap-2">
@@ -1359,11 +1329,6 @@ export default function SessionPage() {
             🟢 말하세요
           </span>
         )}
-      </div>
-
-      {/* Staff area (bottom half) */}
-      <div className="flex-1 flex flex-col min-h-0 p-3">
-        <ConversationLog turns={turns} side="staff" lang={patientLang} />
       </div>
 
       {/* Status footer */}
