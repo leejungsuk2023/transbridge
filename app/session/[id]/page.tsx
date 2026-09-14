@@ -7,11 +7,35 @@ import { PatientLang, SpeakerRole } from "@/types";
 import {
   GeminiLiveSession,
   GeminiLiveConfig,
+  GeminiLiveCallbacks,
   arrayBufferToBase64,
 } from "@/lib/gemini-client";
 import { logError } from "@/lib/error-logger";
-import { NativeAudio, isNativeApp } from "@/lib/native-audio";
+import { NativeAudio, isNativeApp, DeviceReport } from "@/lib/native-audio";
 import type { PluginListenerHandle } from "@capacitor/core";
+
+// ---------------------------------------------------------------------------
+// Dual-engine constants
+// ---------------------------------------------------------------------------
+// targetLanguageCode values for the gemini-3.5-live-translate-preview model.
+// Plain ISO codes (not region-qualified) are what was live-validated in June
+// 2026 (commit 6b220a7): KO->TH and TH->KO both translated correctly with
+// "th" / "ko". Keep the validated form rather than guessing BCP-47 variants.
+const TRANSLATE_LANG: Record<PatientLang, string> = {
+  th: "th",
+  vi: "vi",
+  en: "en",
+  id: "id",
+  es: "es",
+  mn: "mn",
+  yue: "yue",
+  zh: "zh",
+  ja: "ja",
+  fr: "fr",
+  de: "de",
+};
+const KOREAN_TRANSLATE_LANG = "ko";
+const DEFAULT_TRANSLATE_MODEL = "gemini-3.5-live-translate-preview";
 
 // ---------------------------------------------------------------------------
 // Session timer hook
@@ -175,6 +199,274 @@ interface PrompterState {
 
 const EMPTY_PROMPTER: PrompterState = { text: "", glossaryTerms: [], speaker: "staff" };
 
+/** Combines two sessions' connection states into one, biased toward the worse state. */
+function worstConnectionState(a: ConnectionState, b: ConnectionState): ConnectionState {
+  const rank: Record<ConnectionState, number> = {
+    connected: 0,
+    connecting: 1,
+    reconnecting: 2,
+    disconnected: 3,
+  };
+  return rank[a] >= rank[b] ? a : b;
+}
+
+// ---------------------------------------------------------------------------
+// Dual engine — two one-direction gemini-3.5-live-translate-preview sessions fed
+// by the native plugin's two independent channels (staff headset / patient
+// built-in mic+speaker). Kept as a standalone helper (rather than inflating
+// init()) since it's a fully separate wiring path from the single-session
+// native/web branches below. Returns a cleanup function that disconnects both
+// sessions; the caller's effect cleanup still owns tearing down NativeAudio
+// itself (removeAllListeners + stop), since that's common to every native path.
+// ---------------------------------------------------------------------------
+interface DualTokenData {
+  apiKey?: string;
+  ephemeralToken?: string;
+  translateModel?: string;
+}
+
+interface StartDualEngineParams {
+  tokenData: DualTokenData;
+  sessionId: string;
+  patientLang: PatientLang;
+  silenceDurationMs?: number;
+  setError: (msg: string | null) => void;
+  setConnectionState: (s: ConnectionState) => void;
+  connectionStateRef: React.MutableRefObject<ConnectionState>;
+  setReconnectExhausted: (b: boolean) => void;
+  setPatientPrompter: React.Dispatch<React.SetStateAction<PrompterState>>;
+  setStaffPrompter: React.Dispatch<React.SetStateAction<PrompterState>>;
+  setStaffTtsPlaying: (b: boolean) => void;
+  setPatientTtsPlaying: (b: boolean) => void;
+  setDeviceReport: (r: DeviceReport) => void;
+  patientTtsPlayingRef: React.MutableRefObject<boolean>;
+  staffSessionRef: React.MutableRefObject<GeminiLiveSession | null>;
+  patientSessionRef: React.MutableRefObject<GeminiLiveSession | null>;
+}
+
+async function startDualEngine(params: StartDualEngineParams): Promise<() => void> {
+  const {
+    tokenData,
+    sessionId,
+    patientLang,
+    silenceDurationMs,
+    setError,
+    setConnectionState,
+    connectionStateRef,
+    setReconnectExhausted,
+    setPatientPrompter,
+    setStaffPrompter,
+    setStaffTtsPlaying,
+    setPatientTtsPlaying,
+    setDeviceReport,
+    patientTtsPlayingRef,
+    staffSessionRef,
+    patientSessionRef,
+  } = params;
+
+  const translateModel = tokenData.translateModel ?? DEFAULT_TRANSLATE_MODEL;
+  const STATUS_TEXT = "🎤 잘 들었어요. 통역 시작합니다...";
+
+  // Per-session "turn started" flags: staff-session output always targets the
+  // patient prompter, patient-session output always targets the staff prompter.
+  // Each flips false on that session's turnComplete so the next turn replaces
+  // rather than appends — the two directions never share or clobber one flag.
+  const staffTurnStartedRef = { current: false };
+  const patientTurnStartedRef = { current: false };
+  // Gap-timer fallback: the translate model does not always send turnComplete
+  // (observed in the June evaluation). If no transcript arrives for TURN_GAP_MS,
+  // treat the turn as over so the next utterance replaces instead of appending
+  // forever. Both this timer and turnComplete clear the flag; either suffices.
+  const TURN_GAP_MS = 2500;
+  let staffGapTimer: ReturnType<typeof setTimeout> | null = null;
+  let patientGapTimer: ReturnType<typeof setTimeout> | null = null;
+  const armStaffGap = () => {
+    if (staffGapTimer) clearTimeout(staffGapTimer);
+    staffGapTimer = setTimeout(() => { staffTurnStartedRef.current = false; }, TURN_GAP_MS);
+  };
+  const armPatientGap = () => {
+    if (patientGapTimer) clearTimeout(patientGapTimer);
+    patientGapTimer = setTimeout(() => { patientTurnStartedRef.current = false; }, TURN_GAP_MS);
+  };
+  const staffStateRef: { current: ConnectionState } = { current: "connecting" };
+  const patientStateRef: { current: ConnectionState } = { current: "connecting" };
+
+  const publishState = () => {
+    const combined = worstConnectionState(staffStateRef.current, patientStateRef.current);
+    connectionStateRef.current = combined;
+    setConnectionState(combined);
+  };
+
+  const staffCallbacks: GeminiLiveCallbacks = {
+    onOriginalText: () => {
+      setStaffPrompter((prev) =>
+        prev.text === STATUS_TEXT && prev.speaker === "staff"
+          ? prev
+          : { text: STATUS_TEXT, glossaryTerms: [], speaker: "staff" }
+      );
+    },
+    onTranslatedText: (text) => {
+      // Read/flip the flag outside the updater: React may invoke updaters twice.
+      const append = staffTurnStartedRef.current;
+      staffTurnStartedRef.current = true;
+      armStaffGap();
+      setPatientPrompter((prev) => ({
+        ...prev, text: append ? prev.text + text : text, speaker: "staff",
+      }));
+    },
+    onTurnComplete: () => {
+      staffTurnStartedRef.current = false;
+      if (staffGapTimer) { clearTimeout(staffGapTimer); staffGapTimer = null; }
+    },
+    onAudio: (_data, base64) => {
+      NativeAudio.playPcm({ data: base64, channel: "patient" }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError({
+          errorType: "audio_context",
+          errorMessage: msg,
+          sessionId,
+          patientLang,
+          context: { state: "dual_playPcm_failed", channel: "patient" },
+        });
+      });
+    },
+    onInterrupt: () => {
+      NativeAudio.stopPlayback({ channel: "patient" }).catch(() => {});
+      setPatientTtsPlaying(false);
+    },
+    onError: (err) => setError(err),
+    onStateChange: (state) => {
+      staffStateRef.current = state as ConnectionState;
+      publishState();
+    },
+    onReconnectExhausted: () => setReconnectExhausted(true),
+  };
+
+  const patientCallbacks: GeminiLiveCallbacks = {
+    onOriginalText: () => {
+      setPatientPrompter((prev) =>
+        prev.text === STATUS_TEXT && prev.speaker === "patient"
+          ? prev
+          : { text: STATUS_TEXT, glossaryTerms: [], speaker: "patient" }
+      );
+    },
+    onTranslatedText: (text) => {
+      const append = patientTurnStartedRef.current;
+      patientTurnStartedRef.current = true;
+      armPatientGap();
+      setStaffPrompter((prev) => ({
+        ...prev, text: append ? prev.text + text : text, speaker: "patient",
+      }));
+    },
+    onTurnComplete: () => {
+      patientTurnStartedRef.current = false;
+      if (patientGapTimer) { clearTimeout(patientGapTimer); patientGapTimer = null; }
+    },
+    onAudio: (_data, base64) => {
+      NativeAudio.playPcm({ data: base64, channel: "staff" }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError({
+          errorType: "audio_context",
+          errorMessage: msg,
+          sessionId,
+          patientLang,
+          context: { state: "dual_playPcm_failed", channel: "staff" },
+        });
+      });
+    },
+    onInterrupt: () => {
+      NativeAudio.stopPlayback({ channel: "staff" }).catch(() => {});
+      setStaffTtsPlaying(false);
+    },
+    onError: (err) => setError(err),
+    onStateChange: (state) => {
+      patientStateRef.current = state as ConnectionState;
+      publishState();
+    },
+    onReconnectExhausted: () => setReconnectExhausted(true),
+  };
+
+  // staffSession: hears the staff (Korean), speaks the patient's language.
+  const staffSession = new GeminiLiveSession(
+    {
+      model: translateModel,
+      apiKey: tokenData.apiKey,
+      ephemeralToken: tokenData.ephemeralToken,
+      systemPrompt: "",
+      sessionId,
+      patientLang,
+      silenceDurationMs,
+      translation: { targetLanguageCode: TRANSLATE_LANG[patientLang], voiceName: "Charon" },
+    },
+    staffCallbacks
+  );
+
+  // patientSession: hears the patient, speaks Korean. Different voice from
+  // staffSession is deliberate — listeners can tell who is being interpreted.
+  const patientSession = new GeminiLiveSession(
+    {
+      model: translateModel,
+      apiKey: tokenData.apiKey,
+      ephemeralToken: tokenData.ephemeralToken,
+      systemPrompt: "",
+      sessionId,
+      patientLang,
+      silenceDurationMs,
+      translation: { targetLanguageCode: KOREAN_TRANSLATE_LANG, voiceName: "Kore" },
+    },
+    patientCallbacks
+  );
+
+  staffSessionRef.current = staffSession;
+  patientSessionRef.current = patientSession;
+
+  await Promise.all([staffSession.connect(), patientSession.connect()]);
+
+  const chunkHandle = await NativeAudio.addListener("chunk", ({ data, channel }) => {
+    if (channel === "staff") {
+      // Headset mic — no acoustic echo path, so this direction is full duplex.
+      staffSession.sendAudio(data);
+    } else if (channel === "patient") {
+      // The phone speaker sits next to the phone mic and the patient TTS output
+      // is a MEDIA track platform AEC may not reference, so the patient channel
+      // stays half-duplex: don't feed the mic back in while it's playing.
+      if (!patientTtsPlayingRef.current) patientSession.sendAudio(data);
+    }
+  });
+
+  const playbackHandle = await NativeAudio.addListener("playbackState", ({ playing, channel }) => {
+    if (channel === "patient") {
+      patientTtsPlayingRef.current = playing;
+      setPatientTtsPlaying(playing);
+    } else if (channel === "staff") {
+      setStaffTtsPlaying(playing);
+    }
+  });
+
+  const routingHandle = await NativeAudio.addListener("routing", (report) => {
+    setDeviceReport(report);
+    logError({
+      errorType: "dual_routing",
+      errorMessage: JSON.stringify(report),
+      sessionId,
+      patientLang,
+      context: { source: "routing_event" },
+    });
+  });
+
+  return () => {
+    if (staffGapTimer) clearTimeout(staffGapTimer);
+    if (patientGapTimer) clearTimeout(patientGapTimer);
+    chunkHandle.remove();
+    playbackHandle.remove();
+    routingHandle.remove();
+    staffSession.disconnect();
+    patientSession.disconnect();
+    staffSessionRef.current = null;
+    patientSessionRef.current = null;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // SessionPage component
 // ---------------------------------------------------------------------------
@@ -185,13 +477,21 @@ export default function SessionPage() {
 
   const sessionId = params.id as string;
   const patientLang = (searchParams.get("lang") ?? "th") as PatientLang;
+  const wantsDual = searchParams.get("engine") === "dual";
+  // vad=<ms> overrides the VAD end-of-speech silence window, clamped to a sane range.
+  const vadParam = searchParams.get("vad");
+  let silenceDurationMs: number | undefined;
+  if (vadParam) {
+    const parsed = parseInt(vadParam, 10);
+    if (!Number.isNaN(parsed)) silenceDurationMs = Math.min(2500, Math.max(300, parsed));
+  }
 
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [patientPrompter, setPatientPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [staffPrompter, setStaffPrompter] = useState<PrompterState>(EMPTY_PROMPTER);
   const [error, setError] = useState<string | null>(null);
   const [reconnectExhausted, setReconnectExhausted] = useState(false);
-  const [ttsPlaying, setTtsPlaying] = useState(false); // mirrors isPlayingAudioRef for the UI turn indicator
+  const [ttsPlaying, setTtsPlaying] = useState(false); // mirrors isPlayingAudioRef for the UI turn indicator (single/web mode)
   // Network online/offline state (displayed via OfflineOverlay in layout)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isOnline, setIsOnline] = useState(true);
@@ -202,8 +502,42 @@ export default function SessionPage() {
   const [isNative, setIsNative] = useState(false);
   useEffect(() => { setIsNative(isNativeApp()); }, []);
 
+  // Dual-channel mode: only true once NativeAudio.start({mode:'dual'}) actually
+  // succeeds — a rejection (no headset / unsupported OS) falls back to the
+  // single-session native path and this stays false.
+  const [isDualActive, setIsDualActive] = useState(false);
+  const [deviceReport, setDeviceReport] = useState<DeviceReport | null>(null);
+  const [staffTtsPlaying, setStaffTtsPlaying] = useState(false);
+  const [patientTtsPlaying, setPatientTtsPlaying] = useState(false);
+
+  // Face-to-face flip: rotates the patient half 180° so a patient sitting across
+  // the desk reads it upright. Persisted per-device.
+  const [flipPatient, setFlipPatient] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("mt_flip_patient") === "1") setFlipPatient(true);
+    } catch {
+      // Ignore — private browsing / storage disabled
+    }
+  }, []);
+  const toggleFlipPatient = () => {
+    setFlipPatient((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("mt_flip_patient", next ? "1" : "0");
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+  };
+
   const timer = useSessionTimer();
   const geminiSessionRef = useRef<GeminiLiveSession | null>(null);
+  const staffSessionRef = useRef<GeminiLiveSession | null>(null); // dual mode only
+  const patientSessionRef = useRef<GeminiLiveSession | null>(null); // dual mode only
+  const dualCleanupRef = useRef<(() => void) | null>(null);
+  const patientTtsPlayingRef = useRef(false); // dual mode: gates the patient channel's half-duplex mic
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -297,7 +631,7 @@ export default function SessionPage() {
           tokenExpiresAtRef.current = tokenData.data.expiresAt;
         }
 
-        const config: GeminiLiveConfig = { ...tokenData.data, sessionId, patientLang };
+        const config: GeminiLiveConfig = { ...tokenData.data, sessionId, patientLang, silenceDurationMs };
 
         // Native (Capacitor Android shell): mic capture + TTS playback go through the
         // NativeAudio plugin (OS audio stack, hardware AEC) instead of Web Audio API,
@@ -371,6 +705,68 @@ export default function SessionPage() {
             throw err;
           }
           if (cancelled) { NativeAudio.stop().catch(() => {}); return; }
+
+          // Dual-channel attempt: staff headset + phone built-in mic/speaker as two
+          // independent one-direction translate sessions. Falls back to the normal
+          // single-session native path below on any rejection.
+          if (wantsDual) {
+            let dualReport: DeviceReport | null = null;
+            try {
+              dualReport = await NativeAudio.start({ mode: 'dual' });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (msg === 'no_headset') {
+                setError('이어폰(블루투스/유선)이 연결되지 않아 기본 모드로 시작합니다');
+              } else if (msg === 'unsupported_api') {
+                setError('이 기기는 2채널 모드를 지원하지 않습니다 (Android 12 이상 필요)');
+              } else {
+                setError('2채널 모드 시작에 실패하여 기본 모드로 시작합니다');
+              }
+              logError({ errorType: 'dual_fallback', errorMessage: msg, sessionId, patientLang });
+            }
+
+            if (cancelled) { NativeAudio.stop().catch(() => {}); return; }
+
+            if (dualReport) {
+              setDeviceReport(dualReport);
+              setIsDualActive(true);
+              logError({
+                errorType: 'dual_routing',
+                errorMessage: JSON.stringify(dualReport),
+                sessionId,
+                patientLang,
+                context: { source: 'start_result' },
+              });
+
+              const cleanupDual = await startDualEngine({
+                tokenData: tokenData.data,
+                sessionId,
+                patientLang,
+                silenceDurationMs,
+                setError,
+                setConnectionState: (s) => setConnectionState(s),
+                connectionStateRef,
+                setReconnectExhausted,
+                setPatientPrompter,
+                setStaffPrompter,
+                setStaffTtsPlaying,
+                setPatientTtsPlaying,
+                setDeviceReport,
+                patientTtsPlayingRef,
+                staffSessionRef,
+                patientSessionRef,
+              });
+
+              if (cancelled) {
+                cleanupDual();
+                NativeAudio.stop().catch(() => {});
+                return;
+              }
+              dualCleanupRef.current = cleanupDual;
+              return; // Dual engine owns its own audio routing — skip the single-session path entirely
+            }
+            // dualReport is null → fell back; continue into the normal native start below.
+          }
 
           try {
             await NativeAudio.start();
@@ -639,6 +1035,10 @@ export default function SessionPage() {
 
     return () => {
       cancelled = true;
+      // Dual engine (if it was started for this run) owns its own two Gemini
+      // sessions and NativeAudio listeners; disconnect it first.
+      dualCleanupRef.current?.();
+      dualCleanupRef.current = null;
       if (playbackWatchdogRef.current) {
         clearTimeout(playbackWatchdogRef.current);
         playbackWatchdogRef.current = null;
@@ -657,6 +1057,8 @@ export default function SessionPage() {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       geminiSessionRef.current?.disconnect();
       // Native-only teardown: web refs above are already null-safe no-ops here.
+      // Covers both the single-session native path and dual (removeAllListeners
+      // also clears the chunk/playbackState/routing listeners startDualEngine added).
       if (isNativeApp()) {
         nativeChunkHandleRef.current?.remove();
         nativePlaybackHandleRef.current?.remove();
@@ -675,12 +1077,15 @@ export default function SessionPage() {
     const handleOnline = () => {
       setIsOnline(true);
       // If the Gemini session lost connection while we were offline, reconnect
-      if (
-        connectionStateRef.current === "disconnected" &&
-        geminiSessionRef.current
-      ) {
-        console.log("[Network] Back online — triggering Gemini reconnect");
-        geminiSessionRef.current.connect();
+      if (connectionStateRef.current === "disconnected") {
+        if (staffSessionRef.current || patientSessionRef.current) {
+          console.log("[Network] Back online — triggering dual Gemini reconnect");
+          staffSessionRef.current?.connect();
+          patientSessionRef.current?.connect();
+        } else if (geminiSessionRef.current) {
+          console.log("[Network] Back online — triggering Gemini reconnect");
+          geminiSessionRef.current.connect();
+        }
       }
     };
     const handleOffline = () => {
@@ -747,6 +1152,8 @@ export default function SessionPage() {
   const handleEndSession = async () => {
     if (!confirm("통역을 종료하시겠습니까?")) return;
     geminiSessionRef.current?.disconnect();
+    staffSessionRef.current?.disconnect();
+    patientSessionRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     if (isNative) {
       NativeAudio.stop().catch(() => {});
@@ -793,23 +1200,42 @@ export default function SessionPage() {
 
       {/* Status bar */}
       <div className="flex-none flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
-        <div className="flex items-center gap-2">
-          <span
-            className={`w-2 h-2 rounded-full ${stateColor} ${
-              connectionState === "connected" || connectionState === "reconnecting" ? "animate-pulse" : ""
-            }`}
-          />
-          <span className="text-sm text-gray-300 font-medium">
-            {langLabel} ↔ 한국어
-            {isNative && <span className="text-[10px] text-emerald-400 ml-2">APP</span>}
-          </span>
+        <div className="flex flex-col min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${stateColor} ${
+                connectionState === "connected" || connectionState === "reconnecting" ? "animate-pulse" : ""
+              }`}
+            />
+            <span className="text-sm text-gray-300 font-medium">
+              {langLabel} ↔ 한국어
+              {isDualActive ? (
+                <span className="text-[10px] text-emerald-400 ml-2">🎧 2CH</span>
+              ) : isNative ? (
+                <span className="text-[10px] text-emerald-400 ml-2">APP</span>
+              ) : null}
+            </span>
+          </div>
+          {isDualActive && deviceReport && (
+            <span className="text-[10px] text-gray-500 truncate">
+              직원: {deviceReport.devices.staffIn} · 환자: {deviceReport.devices.patientIn}/{deviceReport.devices.patientOut}
+            </span>
+          )}
         </div>
-        <button
-          onClick={handleEndSession}
-          className="text-sm text-red-400 hover:text-red-300 font-medium px-3 py-1.5 rounded-lg hover:bg-red-950 transition"
-        >
-          종료
-        </button>
+        <div className="flex items-center gap-1 flex-none">
+          <button
+            onClick={toggleFlipPatient}
+            className="text-xs text-gray-400 hover:text-gray-200 font-medium px-2.5 py-1.5 rounded-lg hover:bg-gray-800 transition"
+          >
+            ↕ 환자화면
+          </button>
+          <button
+            onClick={handleEndSession}
+            className="text-sm text-red-400 hover:text-red-300 font-medium px-3 py-1.5 rounded-lg hover:bg-red-950 transition"
+          >
+            종료
+          </button>
+        </div>
       </div>
 
       {/* Error / debug banner */}
@@ -830,7 +1256,12 @@ export default function SessionPage() {
             onClick={() => {
               setReconnectExhausted(false);
               setError(null);
-              geminiSessionRef.current?.retryConnect();
+              if (staffSessionRef.current || patientSessionRef.current) {
+                staffSessionRef.current?.retryConnect();
+                patientSessionRef.current?.retryConnect();
+              } else {
+                geminiSessionRef.current?.retryConnect();
+              }
             }}
             className="text-sm text-red-400 hover:text-red-300 font-medium px-3 py-1.5 rounded-lg hover:bg-red-950 transition ml-4"
           >
@@ -840,7 +1271,7 @@ export default function SessionPage() {
       )}
 
       {/* Patient area (top half) */}
-      <div className="flex-1 flex flex-col min-h-0 p-3">
+      <div className={`flex-1 flex flex-col min-h-0 p-3 ${flipPatient ? "rotate-180" : ""}`}>
         <PrompterDisplay
           text={patientPrompter.text}
           glossaryTerms={patientPrompter.glossaryTerms}
@@ -849,12 +1280,21 @@ export default function SessionPage() {
         />
       </div>
 
-      {/* Turn indicator — tells the user when the mic is listening (half-duplex) */}
-      <div className="flex-none flex items-center justify-center py-2 bg-gray-950 border-y border-gray-800">
+      {/* Turn indicator — tells the user when the mic is listening */}
+      <div className="flex-none flex items-center justify-center py-2 bg-gray-950 border-y border-gray-800 gap-2">
         {connectionState !== "connected" ? (
           <span className="px-5 py-2 rounded-full text-base font-bold bg-gray-800 text-gray-300">
             {connectionState === "reconnecting" ? "재연결 중…" : "연결 중…"}
           </span>
+        ) : isDualActive ? (
+          <>
+            <span className="px-4 py-1.5 rounded-full text-sm font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+              직원 🎧 {staffTtsPlaying ? "통역 재생" : "듣는 중"}
+            </span>
+            <span className="px-4 py-1.5 rounded-full text-sm font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+              환자 🔊 {patientTtsPlaying ? "통역 재생" : "말하세요"}
+            </span>
+          </>
         ) : ttsPlaying ? (
           <span className="px-5 py-2 rounded-full text-base font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
             {isNative ? "🔊 통역 중 · 끼어들어도 됩니다" : "🔴 통역 중 · 잠시만요"}

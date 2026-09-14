@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
           systemPrompt,
           wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
           expiresAt,
+          translateModel: 'gemini-3.5-live-translate-preview',
         },
       }, { headers: NO_CACHE });
     }
@@ -77,6 +78,7 @@ export async function POST(req: NextRequest) {
         systemPrompt,
         wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
         expiresAt,
+        translateModel: 'gemini-3.5-live-translate-preview',
       },
     }, { headers: NO_CACHE });
   } catch (err) {

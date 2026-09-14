@@ -9,5 +9,6 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(NativeAudioPlugin.class);
         super.onCreate(savedInstanceState);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 }

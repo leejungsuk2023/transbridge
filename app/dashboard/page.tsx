@@ -53,6 +53,28 @@ export default function DashboardPage() {
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<PatientLang | null>(null);
   const [starting, setStarting] = useState(false);
+  // Experimental dual-channel (2CH) interpretation mode — staff headset +
+  // phone built-in mic/speaker as two independent one-direction sessions.
+  // Native-app only; persisted per-device so the choice survives a reload.
+  const [dualEngine, setDualEngine] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("mt_dual_engine") === "1") setDualEngine(true);
+    } catch {
+      // Ignore — private browsing / storage disabled
+    }
+  }, []);
+  const toggleDualEngine = () => {
+    setDualEngine((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("mt_dual_engine", next ? "1" : "0");
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+  };
 
   // Real session data from Supabase
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -193,7 +215,7 @@ export default function DashboardPage() {
         alert('세션 생성에 실패했습니다. 다시 시도해주세요.');
         return;
       }
-      router.push(`/session/${sessionId}?lang=${selectedLang}`);
+      router.push(`/session/${sessionId}?lang=${selectedLang}${dualEngine ? "&engine=dual" : ""}`);
     } catch (err) {
       console.error('[Dashboard] Session creation error:', err);
       alert('세션 생성 중 오류가 발생했습니다. 다시 시도해주세요.');
@@ -272,6 +294,19 @@ export default function DashboardPage() {
               </button>
             ))}
           </div>
+
+          {/* Dual-channel (2CH) experimental mode toggle */}
+          <label className="flex items-center gap-2 px-1 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={dualEngine}
+              onChange={toggleDualEngine}
+              className="w-4 h-4 rounded border-gray-300 text-fuchsia-600 focus:ring-fuchsia-500"
+            />
+            <span className="text-sm text-gray-600">
+              🎧 2채널 모드 (직원 이어폰 필요 · 실험)
+            </span>
+          </label>
 
           {/* Start button */}
           <button

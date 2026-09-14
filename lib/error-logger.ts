@@ -15,6 +15,8 @@ type ErrorType =
   | 'audio_worklet'         // AudioWorklet load/init failure
   | 'token_fetch'           // /api/gemini-token failed
   | 'session_fetch'         // /api/session failed
+  | 'dual_routing'          // dual-channel native audio start() succeeded — logs the DeviceReport
+  | 'dual_fallback'         // dual-channel native audio start() rejected — fell back to single mode
   | 'unknown';
 
 export interface LogErrorParams {

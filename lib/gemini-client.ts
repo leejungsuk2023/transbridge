@@ -27,6 +27,15 @@ export interface GeminiLiveConfig {
   sessionId?: string;
   hospitalId?: string;
   patientLang?: string;
+  /**
+   * When set, connects using the dedicated gemini-3.5-live-translate-preview
+   * translationConfig path instead of the general native-audio model path (see
+   * _openConnection). One session only ever produces audio in targetLanguageCode —
+   * bidirectional interpretation needs two sessions, one per direction.
+   */
+  translation?: { targetLanguageCode: string; voiceName?: string };
+  /** Overrides the default VAD end-of-speech silence window (ms). Default stays 1000. */
+  silenceDurationMs?: number;
 }
 
 export interface GeminiLiveCallbacks {
@@ -41,6 +50,8 @@ export interface GeminiLiveCallbacks {
   onInterrupt?: () => void;
   /** Called when reconnect attempts are exhausted — lets the UI offer a manual retry button. */
   onReconnectExhausted?: () => void;
+  /** Called on serverContent.turnComplete — lets callers key transcript accumulation per turn. */
+  onTurnComplete?: () => void;
 }
 
 /**
@@ -108,39 +119,68 @@ export class GeminiLiveSession {
    * Messages on a handover connection are held until setupComplete, then the session is promoted.
    */
   private async _openConnection(isHandover: boolean): Promise<Session> {
-    // LiveConnectConfig matches Google's reference exactly.
-    // temperature=0 + topP=0.1 + topK=1: maximally deterministic output —
-    // reduces creative/LLM behavior so the model sticks to literal translation
-    // rather than generating explanations or answers.
-    // These fields are set directly on LiveConnectConfig (not nested under
-    // generationConfig) per @google/genai SDK types (LiveConnectConfig interface).
-    const liveConfig: LiveConnectConfig = {
-      responseModalities: [Modality.AUDIO],
-      systemInstruction: {
-        parts: [{ text: this.config.systemPrompt }],
+    const silenceDurationMs = this.config.silenceDurationMs ?? 1000;
+
+    // VAD tuning for medical interpretation — speakers pause mid-sentence, so
+    // we don't want to cut them off, but 1.8s felt sluggish in practice. 1.0s
+    // is a balance: snappy end-of-turn while still tolerating short pauses.
+    // Shared by both config branches below; silenceDurationMs is overridable
+    // per-config (dual-engine tuning) via GeminiLiveConfig.silenceDurationMs.
+    const realtimeInputConfig = {
+      automaticActivityDetection: {
+        startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
+        endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
+        silenceDurationMs,
+        prefixPaddingMs: 300,
       },
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-      // Disable thinking to minimize latency — translate immediately
-      thinkingConfig: { thinkingBudget: 0 },
-      // Balanced sampling: enough flexibility for STT context-aware correction
-      // while still suppressing hallucination and LLM assistant behavior.
-      temperature: 0.2,
-      topP: 0.3,
-      topK: 5,
-      // VAD tuning for medical interpretation — speakers pause mid-sentence, so
-      // we don't want to cut them off, but 1.8s felt sluggish in practice. 1.0s
-      // is a balance: snappy end-of-turn while still tolerating short pauses.
-      realtimeInputConfig: {
-        automaticActivityDetection: {
-          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
-          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
-          silenceDurationMs: 1000,
-          prefixPaddingMs: 300,
-        },
-        activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-      },
+      activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
     };
+
+    let liveConfig: LiveConnectConfig;
+    if (this.config.translation) {
+      // Dedicated translate model (gemini-3.5-live-translate-preview) path: this model
+      // is a purpose-built one-target-per-session interpreter, not a general assistant,
+      // so the system-prompt role-lock and anti-hallucination sampling knobs used below
+      // for the native-audio model don't apply here — worse, sending systemInstruction
+      // to this model breaks translationConfig.echoTargetLanguage:false (the wrong-
+      // direction session starts echoing the input instead of staying silent).
+      liveConfig = {
+        responseModalities: [Modality.AUDIO],
+        translationConfig: {
+          targetLanguageCode: this.config.translation.targetLanguageCode,
+          echoTargetLanguage: false,
+        },
+        ...(this.config.translation.voiceName
+          ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.config.translation.voiceName } } } }
+          : {}),
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        realtimeInputConfig,
+      };
+    } else {
+      // LiveConnectConfig matches Google's reference exactly.
+      // temperature=0 + topP=0.1 + topK=1: maximally deterministic output —
+      // reduces creative/LLM behavior so the model sticks to literal translation
+      // rather than generating explanations or answers.
+      // These fields are set directly on LiveConnectConfig (not nested under
+      // generationConfig) per @google/genai SDK types (LiveConnectConfig interface).
+      liveConfig = {
+        responseModalities: [Modality.AUDIO],
+        systemInstruction: {
+          parts: [{ text: this.config.systemPrompt }],
+        },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        // Disable thinking to minimize latency — translate immediately
+        thinkingConfig: { thinkingBudget: 0 },
+        // Balanced sampling: enough flexibility for STT context-aware correction
+        // while still suppressing hallucination and LLM assistant behavior.
+        temperature: 0.2,
+        topP: 0.3,
+        topK: 5,
+        realtimeInputConfig,
+      };
+    }
 
     // Local flag in closure: tracks whether this handover connection has been promoted.
     // After promotion, subsequent messages should flow through _handleMessage normally.
@@ -396,6 +436,7 @@ export class GeminiLiveSession {
       if (serverContent.turnComplete) {
         this.isOutputPlaying = false;
         this.pendingTranscriptLength = 0;
+        this.callbacks.onTurnComplete?.();
         // Reset the model's conversation CONTEXT after every completed turn. The native
         // model accumulates context and, for weaker languages (Vietnamese/Thai),
         // starts echoing the input instead of translating after a couple of turns.
@@ -403,7 +444,14 @@ export class GeminiLiveSession {
         // handover mechanism (pre-open a fresh session + atomic swap). This runs while
         // half-duplex has the mic muted during TTS playback, so the swap completes
         // before the next speaker talks — seamless, no gap.
-        this._handleGoAway().catch(() => {});
+        //
+        // SKIPPED for the translate-model path (this.config.translation set): that
+        // model doesn't exhibit the echo drift this works around, and in full-duplex
+        // dual mode a context swap mid-speech (the other channel may be talking right
+        // now) can drop audio the handover races against.
+        if (!this.config.translation) {
+          this._handleGoAway().catch(() => {});
+        }
       }
     }
   }
